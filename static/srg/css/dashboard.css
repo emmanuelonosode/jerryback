@@ -1,0 +1,142 @@
+/*
+ * Dashboard styles.
+ *
+ * WRITTEN AS PLAIN CSS RATHER THAN TAILWIND UTILITIES ON PURPOSE.
+ *
+ * Unfold ships a PRECOMPILED Tailwind stylesheet. Utility classes it does not
+ * itself use are simply absent, so writing e.g. `dark:bg-green-500/10` in a
+ * template produces a class that resolves to nothing - the element renders with
+ * a light background in dark mode and the text on it becomes unreadable. That
+ * failure is silent: the markup looks right and the page looks broken.
+ *
+ * These classes key off `.dark` on an ancestor, which is how Unfold toggles the
+ * theme, so they follow the theme switcher correctly.
+ *
+ * Tone is never carried by colour alone. Every card states its meaning in the
+ * description line, so the number is legible without perceiving the hue.
+ */
+
+.srg-card {
+  display: block;
+  padding: 1rem;
+  border: 1px solid rgb(231 229 228);
+  border-radius: 6px;
+  background: #fff;
+  transition: border-color 120ms ease;
+}
+.srg-card:hover { border-color: rgb(29 93 184); }
+
+.srg-card__title {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: rgb(68 64 60);
+}
+.srg-card__value {
+  margin-top: 0.5rem;
+  font-size: 1.875rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: rgb(28 25 23);
+  line-height: 1.1;
+}
+.srg-card__hint {
+  margin-top: 0.5rem;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  color: rgb(120 113 108);
+}
+
+/* Tones. Backgrounds stay tinted rather than solid so the value keeps a high
+   contrast ratio against them in both themes. */
+.srg-card--danger  { border-color: rgb(252 165 165); background: rgb(254 242 242); }
+.srg-card--danger  .srg-card__value { color: rgb(153 27 27); }
+.srg-card--warning { border-color: rgb(252 211 77); background: rgb(255 251 235); }
+.srg-card--warning .srg-card__value { color: rgb(146 64 14); }
+.srg-card--success { border-color: rgb(134 239 172); background: rgb(240 253 244); }
+.srg-card--success .srg-card__value { color: rgb(22 101 52); }
+
+.dark .srg-card {
+  border-color: rgb(41 37 36);
+  background: rgb(28 25 23);
+}
+.dark .srg-card__title { color: rgb(231 229 228); }
+.dark .srg-card__value { color: rgb(250 250 249); }
+.dark .srg-card__hint  { color: rgb(168 162 158); }
+
+.dark .srg-card--danger  { border-color: rgb(153 27 27); background: rgb(69 10 10 / 0.5); }
+.dark .srg-card--danger  .srg-card__value { color: rgb(252 165 165); }
+.dark .srg-card--warning { border-color: rgb(146 64 14); background: rgb(69 26 3 / 0.5); }
+.dark .srg-card--warning .srg-card__value { color: rgb(252 211 77); }
+.dark .srg-card--success { border-color: rgb(22 101 52); background: rgb(5 46 22 / 0.5); }
+.dark .srg-card--success .srg-card__value { color: rgb(134 239 172); }
+
+.srg-grid {
+  display: grid;
+  grid-template-columns: repeat(1, minmax(0, 1fr));
+  gap: 1rem;
+}
+@media (min-width: 640px)  { .srg-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (min-width: 1024px) { .srg-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+
+.srg-section { margin-bottom: 2rem; }
+.srg-section__title {
+  font-size: 1rem;
+  font-weight: 600;
+  color: rgb(28 25 23);
+  margin-bottom: 0.25rem;
+}
+.srg-section__lead {
+  font-size: 0.875rem;
+  color: rgb(120 113 108);
+  margin-bottom: 1rem;
+}
+.dark .srg-section__title { color: rgb(250 250 249); }
+.dark .srg-section__lead  { color: rgb(168 162 158); }
+
+.srg-panel {
+  border: 1px solid rgb(231 229 228);
+  border-radius: 6px;
+  background: #fff;
+  padding: 1rem;
+}
+.dark .srg-panel { border-color: rgb(41 37 36); background: rgb(28 25 23); }
+
+.srg-split {
+  display: grid;
+  grid-template-columns: repeat(1, minmax(0, 1fr));
+  gap: 1rem;
+}
+@media (min-width: 1024px) { .srg-split { grid-template-columns: 2fr 1fr; } }
+
+.srg-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5rem 0.75rem;
+  border-radius: 4px;
+  text-decoration: none;
+  color: inherit;
+}
+.srg-row:hover { background: rgb(245 245 244); }
+.dark .srg-row:hover { background: rgb(41 37 36); }
+.srg-row__count { font-weight: 600; font-variant-numeric: tabular-nums; }
+
+.srg-alert {
+  border: 1px solid rgb(252 165 165);
+  background: rgb(254 242 242);
+  border-radius: 6px;
+  padding: 1rem;
+  margin-bottom: 2rem;
+}
+.srg-alert__title { font-weight: 600; font-size: 0.875rem; color: rgb(153 27 27); margin-bottom: 0.5rem; }
+.srg-alert ul { margin: 0; padding-left: 1.25rem; }
+.srg-alert li { font-size: 0.875rem; color: rgb(153 27 27); }
+.dark .srg-alert { border-color: rgb(153 27 27); background: rgb(69 10 10 / 0.4); }
+.dark .srg-alert__title, .dark .srg-alert li { color: rgb(252 165 165); }
+
+.srg-money { font-size: 1.875rem; font-weight: 600; font-variant-numeric: tabular-nums; color: rgb(28 25 23); }
+.dark .srg-money { color: rgb(250 250 249); }
+.srg-money__sub { font-size: 0.875rem; color: rgb(120 113 108); margin-top: 0.25rem; }
+.dark .srg-money__sub { color: rgb(168 162 158); }
+.srg-money__overdue { margin-top: 0.75rem; font-size: 0.875rem; font-weight: 500; color: rgb(185 28 28); }
+.dark .srg-money__overdue { color: rgb(252 165 165); }

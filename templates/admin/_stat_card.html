@@ -1,0 +1,12 @@
+{% comment %}
+One KPI.
+
+Tone is reinforcement, never the carrier: the description line states what the
+number means whether or not the colour is perceivable.
+{% endcomment %}
+<a href="{{ card.url }}" class="srg-card{% if card.tone != 'default' %} srg-card--{{ card.tone }}{% endif %}"
+   style="text-decoration:none">
+  <div class="srg-card__title">{{ card.title }}</div>
+  <div class="srg-card__value">{{ card.value }}</div>
+  {% if card.description %}<div class="srg-card__hint">{{ card.description }}</div>{% endif %}
+</a>

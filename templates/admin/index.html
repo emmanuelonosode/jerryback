@@ -1,0 +1,89 @@
+{% extends "admin/base.html" %}
+{% load i18n humanize %}
+
+{% comment %}
+Replaces Django's app list.
+
+The sidebar already groups this site by job; a model index here would duplicate
+every entry and reintroduce the raw app labels ("Crm", "Portal") the sidebar
+exists to avoid. This answers the arrival question instead: is anything late?
+
+Note the block comment. `{# ... #}` is single-line only — a multi-line one leaks
+its remaining lines onto the rendered page.
+{% endcomment %}
+
+{% block title %}{{ title }} | {{ site_title }}{% endblock %}
+{% block breadcrumbs %}{% endblock %}
+
+{% block content %}
+
+{% if blockers %}
+<div class="srg-alert">
+  <div class="srg-alert__title">{% trans "Blocking go-live" %}</div>
+  <ul>{% for blocker in blockers %}<li>{{ blocker }}</li>{% endfor %}</ul>
+</div>
+{% endif %}
+
+<section class="srg-section">
+  <h2 class="srg-section__title">{% trans "Needs attention" %}</h2>
+  <p class="srg-section__lead">
+    {% trans "Every number here is a promise with a person on the other end of it." %}
+  </p>
+  <div class="srg-grid">
+    {% for card in kpi %}{% include "admin/_stat_card.html" %}{% endfor %}
+  </div>
+</section>
+
+<section class="srg-section">
+  <h2 class="srg-section__title">{% trans "Is the inventory truthful?" %}</h2>
+  <p class="srg-section__lead">
+    {% trans "Listings are entered by hand, so drift is a staffing problem. This keeps it visible." %}
+  </p>
+  <div class="srg-grid">
+    {% for card in inventory %}{% include "admin/_stat_card.html" %}{% endfor %}
+  </div>
+</section>
+
+<section class="srg-section">
+  <h2 class="srg-section__title">{% trans "Who is visiting" %}</h2>
+  <p class="srg-section__lead">
+    {% trans "Folded in by process_telemetry, so these lag the live site by however often it runs." %}
+  </p>
+  <div class="srg-grid">
+    {% for card in traffic %}{% include "admin/_stat_card.html" %}{% endfor %}
+  </div>
+</section>
+
+<div class="srg-split">
+  <section class="srg-panel">
+    <h2 class="srg-section__title">{% trans "Lead pipeline" %}</h2>
+    <div>
+      {% for stage in pipeline %}
+      <a href="{{ stage.url }}" class="srg-row">
+        <span>{{ stage.label }}</span>
+        <span class="srg-row__count">{{ stage.count }}</span>
+      </a>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="srg-panel">
+    <h2 class="srg-section__title">{% trans "Outstanding" %}</h2>
+    <a href="{{ money.url }}" style="text-decoration:none;color:inherit;display:block">
+      <div class="srg-money">${{ money.outstanding_dollars|intcomma }}</div>
+      <div class="srg-money__sub">
+        {% blocktrans count counter=money.outstanding_count %}across {{ counter }} sent invoice{% plural %}across {{ counter }} sent invoices{% endblocktrans %}
+      </div>
+      {% if money.overdue_count %}
+      <div class="srg-money__overdue">
+        {{ money.overdue_count }} {% trans "past its due date" %}
+      </div>
+      {% endif %}
+    </a>
+    <p class="srg-card__hint">
+      {% trans "Stored as cents; formatted only here." %}
+    </p>
+  </section>
+</div>
+
+{% endblock %}

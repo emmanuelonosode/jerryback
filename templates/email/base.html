@@ -1,0 +1,116 @@
+{% comment %}
+Branded wrapper for every outbound email.
+
+TABLES AND INLINE STYLES, deliberately. Outlook renders with Word's HTML engine:
+it ignores flexbox and grid, drops most of a <style> block, and will not honour
+a stylesheet at all in some configurations. Anything that has to survive goes
+inline on a table cell.
+
+THE LOGO IS A PNG AT AN ABSOLUTE URL. Mail clients cannot resolve a relative
+path and Outlook will not render SVG, so the site's SVG mark is no use here -
+this uses the supplied raster lockup. Width and height are set as attributes as
+well as in CSS, because a client that blocks images still needs to reserve the
+right box rather than collapsing the header.
+
+The dark bar behind the logo is the brand blue rather than white, so the white
+lockup can be used and the header still reads if images are blocked.
+{% endcomment %}
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ subject }}</title>
+</head>
+<body style="margin:0;padding:0;background:#F6F6F6;">
+  <!-- Preheader: the grey line a client shows beside the subject. Hidden in
+       the body itself so it is not read twice. -->
+  <div style="display:none;max-height:0;overflow:hidden;opacity:0;">{{ preheader }}</div>
+
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#F6F6F6;">
+    <tr>
+      <td align="center" style="padding:24px 12px;">
+
+        <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="width:600px;max-width:100%;background:#FFFFFF;border-radius:10px;overflow:hidden;">
+
+          <!-- Header -->
+          <tr>
+            <td align="center" style="background:#366CB5;padding:22px 24px;">
+              <img src="{{ site_url }}/brand/logo-lockup-white.png"
+                   alt="{{ company_name }}"
+                   width="128" height="128"
+                   style="display:block;width:128px;height:auto;border:0;">
+            </td>
+          </tr>
+
+          <!-- Body -->
+          <tr>
+            <td style="padding:28px 28px 8px 28px;font-family:Helvetica,Arial,sans-serif;color:#262626;font-size:16px;line-height:1.55;">
+              {% block content %}{{ body_text|linebreaks }}{% endblock %}
+            </td>
+          </tr>
+
+          <!-- Footer -->
+          <tr>
+            <td style="padding:20px 28px 26px 28px;border-top:1px solid #EBEBEB;font-family:Helvetica,Arial,sans-serif;color:#6A6A6A;font-size:12px;line-height:1.6;">
+              <p style="margin:0 0 8px 0;color:#262626;font-weight:bold;font-size:13px;">{{ company_name }}</p>
+
+              {% if address_lines %}
+                <p style="margin:0 0 8px 0;">
+                  {% for line in address_lines %}{{ line }}{% if not forloop.last %}<br>{% endif %}{% endfor %}
+                </p>
+              {% endif %}
+
+              {% if phones %}
+                <p style="margin:0 0 8px 0;">
+                  {% for phone in phones %}<a href="tel:{{ phone.tel }}" style="color:#366CB5;text-decoration:none;">{{ phone.display }}</a>{% if not forloop.last %} &nbsp;·&nbsp; {% endif %}{% endfor %}
+                </p>
+              {% endif %}
+
+              {% if email %}
+                <p style="margin:0 0 12px 0;">
+                  <a href="mailto:{{ email }}" style="color:#366CB5;text-decoration:none;">{{ email }}</a>
+                </p>
+              {% endif %}
+
+              {% comment %}
+              The fair housing statement is not optional decoration. Every piece
+              of advertising this company sends carries it, and an approval
+              email is advertising.
+              {% endcomment %}
+              <p style="margin:0 0 10px 0;">
+                <strong style="color:#262626;">Equal Housing Opportunity.</strong>
+                We comply with all federal, state and local fair housing laws and do not
+                discriminate on the basis of race, colour, religion, sex, familial status,
+                national origin, disability, or any other protected class.
+              </p>
+
+              {% if licences %}
+                <p style="margin:0 0 10px 0;">
+                  Licensed brokerage:
+                  {% for licence in licences %}{{ licence.state }} {{ licence.number }}{% if not forloop.last %} · {% endif %}{% endfor %}
+                </p>
+              {% endif %}
+
+              {% comment %}
+              The anti-fraud line. The payments model rests on account details
+              appearing only on the site, behind an application the person
+              started - so every email says so, giving the recipient something
+              concrete to check a fraudulent message against.
+              {% endcomment %}
+              <p style="margin:0;">
+                We will never send you payment details by email or text, and we never ask
+                for a deposit before a lease. Payment details appear only on
+                <a href="{{ site_url }}" style="color:#366CB5;text-decoration:none;">{{ site_host }}</a>,
+                behind an application you started.
+              </p>
+            </td>
+          </tr>
+
+        </table>
+
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
