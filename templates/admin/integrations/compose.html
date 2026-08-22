@@ -1,0 +1,85 @@
+{% extends "admin/base_site.html" %}
+{% comment %}
+Write a message, pick who it goes to, send.
+
+The template picker fills the subject and body in the browser rather than
+posting back, so choosing one is instant and — more importantly — editing after
+choosing never gets thrown away by a reload.
+{% endcomment %}
+
+{% block content %}
+<div style="max-width:820px">
+
+  <p style="margin:0 0 20px;color:#6A6A6A;line-height:1.6">
+    The branded header, footer, licence list and anti-fraud notice are added to
+    every message automatically. Write only the words you want to say.
+  </p>
+
+  <form method="post" novalidate>
+    {% csrf_token %}
+
+    {% if form.non_field_errors %}
+      <div style="margin-bottom:16px;padding:12px 14px;border:1px solid #A32C2C;border-radius:6px;background:#FAE6E6;color:#A32C2C">
+        {{ form.non_field_errors }}
+      </div>
+    {% endif %}
+
+    {% for field in form %}
+      <div style="margin-bottom:20px">
+        <label for="{{ field.id_for_label }}"
+               style="display:block;font-weight:600;margin-bottom:6px">
+          {{ field.label }}
+        </label>
+
+        {% if field.help_text %}
+          <p style="margin:0 0 8px;font-size:13px;color:#6A6A6A">{{ field.help_text }}</p>
+        {% endif %}
+
+        {{ field }}
+
+        {% if field.errors %}
+          <p style="margin:6px 0 0;font-size:13px;color:#A32C2C">{{ field.errors|striptags }}</p>
+        {% endif %}
+      </div>
+    {% endfor %}
+
+    <div style="display:flex;gap:12px;align-items:center;margin-top:24px">
+      <button type="submit"
+              style="padding:10px 20px;border:0;border-radius:6px;background:#0251A7;color:#fff;font-weight:600;cursor:pointer">
+        Queue it
+      </button>
+      <a href="{% url 'admin:integrations_outboundemail_changelist' %}"
+         style="color:#6A6A6A">Cancel</a>
+      <span style="margin-left:auto;font-size:13px;color:#6A6A6A">
+        Goes out on the next <code>send_queued_email</code> run.
+      </span>
+    </div>
+  </form>
+</div>
+
+<script id="srg-templates" type="application/json">{{ templates_json|safe }}</script>
+<script>
+  (function () {
+    var catalogue = JSON.parse(document.getElementById('srg-templates').textContent);
+    var picker  = document.getElementById('id_template');
+    var subject = document.getElementById('id_subject');
+    var body    = document.getElementById('id_body');
+    if (!picker || !subject || !body) return;
+
+    picker.addEventListener('change', function () {
+      var chosen = catalogue[picker.value];
+      if (!chosen) return;
+
+      // Never silently discard typing. Someone who has started writing and
+      // then browses the templates should not lose the paragraph they wrote.
+      var written = subject.value.trim() || body.value.trim();
+      if (written && !window.confirm('Replace what you have written with this template?')) {
+        return;
+      }
+      subject.value = chosen.subject;
+      body.value = chosen.body;
+      body.focus();
+    });
+  })();
+</script>
+{% endblock %}

@@ -1,0 +1,16 @@
+{% extends "admin/change_list.html" %}
+{% comment %}
+Adds the one thing this screen was missing: a way in to writing a message.
+The default changelist has an "Add" button, but adding through the model form
+is disabled — it can save a row with no branded HTML — so this replaces it.
+{% endcomment %}
+
+{% block object-tools-items %}
+  <li>
+    <a href="{% url 'admin:integrations_outboundemail_compose' %}"
+       class="bg-primary-600 border border-transparent font-medium px-3 py-2 rounded-default text-white">
+      Compose an email
+    </a>
+  </li>
+  {{ block.super }}
+{% endblock %}
