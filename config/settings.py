@@ -182,11 +182,16 @@ AUTH_USER_MODEL = "accounts.User"
 
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
-    # Length is the property that actually helps; composition rules push people
-    # toward Password1!.
+    # Eight, the floor NIST SP 800-63B sets for a user-chosen password, and the
+    # length most people expect. Length is still the property that actually
+    # helps - which is why the composition rules that push people toward
+    # Password1! are deliberately absent - but the three validators either side
+    # of this one carry more weight than the extra four characters did: a
+    # password that is short is rejected here, and one that is common, numeric,
+    # or built from the user's own name and email is rejected by those.
     {
         "NAME": "django.contrib.auth.password_validation.MinimumLengthValidator",
-        "OPTIONS": {"min_length": 12},
+        "OPTIONS": {"min_length": 8},
     },
     {"NAME": "django.contrib.auth.password_validation.CommonPasswordValidator"},
     {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
