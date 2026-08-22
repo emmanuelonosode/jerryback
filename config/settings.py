@@ -50,6 +50,25 @@ DEBUG = env("DEBUG")
 
 ALLOWED_HOSTS = env("ALLOWED_HOSTS") or (["*"] if DEBUG else [])
 
+"""
+LOOPBACK IS ALWAYS ALLOWED.
+
+The public site renders server-side and calls this API over loopback, so those
+requests arrive with `Host: 127.0.0.1:8000`. With ALLOWED_HOSTS set to the
+public hostname and nothing else, Django answers 400 DisallowedHost - and the
+frontend reports it as "Listing API unreachable", which reads like the API is
+down when it is running perfectly. It also breaks container health checks for
+the same reason.
+
+Safe to add unconditionally: a loopback address is only reachable from the
+machine itself, so this widens nothing an attacker can reach. It is appended
+rather than replacing the configured list, so the public hostname still has to
+be set explicitly.
+"""
+for _loopback in ("127.0.0.1", "localhost", "[::1]"):
+    if _loopback not in ALLOWED_HOSTS and "*" not in ALLOWED_HOSTS:
+        ALLOWED_HOSTS.append(_loopback)
+
 # --- Applications ------------------------------------------------------------
 
 INSTALLED_APPS = [
