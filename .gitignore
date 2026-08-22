@@ -1,7 +1,10 @@
 .venv/
 __pycache__/
 *.py[cod]
-.env
+# Every env file, including .env.production — they carry real database
+# passwords. The example is the one exception and must stay tracked.
+.env*
+!.env.example
 db.sqlite3
 staticfiles/
 media/
