@@ -62,6 +62,7 @@ class UserManager(BaseUserManager):
         if not email:
             raise ValueError("An email address is required")
         normalised = self._normalise(email)
+        extra.pop("email_normalised", None)
         user = self.model(email=email.strip(), email_normalised=normalised, **extra)
         # set_password hashes. There is no path here that stores the plaintext.
         user.set_password(password)
