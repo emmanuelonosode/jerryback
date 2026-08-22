@@ -165,6 +165,69 @@ On the Next.js side, set the API base URL to
 
 ---
 
+## The database
+
+The engine comes from `DATABASE_URL`, not from code. SQLite is only a fallback
+so a fresh checkout runs with nothing installed — it is not a production
+target.
+
+```
+mysql://user:password@host:3306/srg_admin        # MySQL 8.0.16+
+postgresql://user:password@host:5432/srg_admin
+```
+
+Nothing here is Postgres-specific: no `django.contrib.postgres` imports, no
+array or range fields, no search vectors. MySQL is a supported target rather
+than a port, with two requirements.
+
+**MySQL must be 8.0.16 or newer.** Fourteen tables carry CHECK constraints and
+older MySQL parses them, then silently ignores them. They are not decoration —
+they are what stops a payment of zero, a second primary image on one property,
+and a payment method going live with nothing to pay to. On an older server
+those rules quietly stop applying and nothing tells you.
+
+**utf8mb4 and `STRICT_TRANS_TABLES`** are set automatically in `settings.py`
+when the engine is MySQL. Strict mode matters: without it MySQL shortens an
+over-long value and writes it anyway rather than raising.
+
+Sizes are within MySQL's limits — the widest indexed column is
+`Property.search_text` at 500 chars, 2000 bytes in utf8mb4, against InnoDB's
+3072-byte index limit.
+
+Two differences worth knowing rather than fixing:
+
+- **UUID primary keys** (31 of them) are stored as `char(32)` on MySQL, where
+  Postgres has a native 16-byte `uuid`. Slightly larger indexes; not a problem
+  at this scale.
+- **`LIKE` is case-insensitive** under MySQL's default collation and
+  case-sensitive on Postgres. Property search is unaffected either way because
+  it normalises both the stored haystack and the query to lowercase before
+  matching — see `normalise_search_text`.
+
+### Driver
+
+`psycopg` for Postgres. For MySQL, `mysqlclient` is faster but needs the C
+client at build time; `PyMySQL` is pure Python and `settings.py` falls back to
+it automatically when `mysqlclient` cannot be imported.
+
+```bash
+brew install mysql-client && pip install mysqlclient   # optional, faster
+```
+
+### Moving the data
+
+There is no data worth migrating yet — the current SQLite file is development
+inventory. Point `DATABASE_URL` at MySQL and run:
+
+```bash
+python manage.py migrate
+python manage.py createsuperuser
+python manage.py rebuild_search_index
+```
+
+If you do need to carry data across, `dumpdata`/`loaddata` works for a set this
+size; do not copy the SQLite file.
+
 ## Scheduled jobs
 
 Three, and the service is quietly broken without the first two.

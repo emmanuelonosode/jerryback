@@ -120,6 +120,52 @@ DATABASES = {
         default=f"sqlite:///{BASE_DIR / 'db.sqlite3'}",
     )
 }
+
+"""
+ENGINE IS CHOSEN BY `DATABASE_URL`, NOT BY CODE.
+
+SQLite is only the fallback so a checkout runs with nothing installed. Anything
+else is a URL:
+
+    postgresql://user:password@host:5432/srg_admin
+    mysql://user:password@host:3306/srg_admin
+
+Nothing in this project is Postgres-specific - no `django.contrib.postgres`
+imports, no array or range fields, no full-text search vectors - so MySQL is a
+supported target rather than a port. Two things it does require:
+
+  * MySQL 8.0.16 or newer. Fourteen tables carry CHECK constraints, which
+    older MySQL parses and then silently ignores. On 8.0.16+ they are enforced;
+    below it they are decoration, and several of them are the only thing
+    stopping a payment of zero or a fee that duplicates the rent.
+
+  * utf8mb4, set below. The default collation is accent- and case-insensitive,
+    which suits this data: the property search normalises both the stored text
+    and the query to lowercase anyway, so it behaves identically on either
+    engine.
+"""
+_engine = DATABASES["default"].get("ENGINE", "")
+
+if "mysql" in _engine:
+    # mysqlclient is the faster C driver but needs libmysqlclient present at
+    # build time. PyMySQL is pure Python and needs nothing, so it stands in
+    # when the C one is unavailable rather than failing at import.
+    try:
+        import MySQLdb  # noqa: F401
+    except ImportError:  # pragma: no cover - depends on the host
+        import pymysql
+
+        pymysql.install_as_MySQLdb()
+
+    DATABASES["default"].setdefault("OPTIONS", {})
+    DATABASES["default"]["OPTIONS"].update({
+        "charset": "utf8mb4",
+        # STRICT_TRANS_TABLES turns silent truncation into an error. Without it
+        # MySQL quietly shortens an over-long value and writes it anyway, which
+        # is exactly the class of failure this codebase spends its constraints
+        # trying to prevent.
+        "sql_mode": "STRICT_TRANS_TABLES",
+    })
 DATABASES["default"]["ATOMIC_REQUESTS"] = True
 """
 ATOMIC_REQUESTS is on deliberately.

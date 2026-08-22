@@ -14,3 +14,12 @@ psycopg-binary==3.3.4
 pycparser==3.0
 sqlparse==0.6.0
 whitenoise==6.12.0
+
+# --- Database drivers --------------------------------------------------------
+# Only the one matching DATABASE_URL is actually loaded. psycopg for
+# PostgreSQL; for MySQL, mysqlclient is faster but needs libmysqlclient at
+# build time (`brew install mysql-client`, or default-libmysqlclient-dev on
+# Debian). PyMySQL is pure Python and needs nothing, and settings.py falls back
+# to it automatically when mysqlclient is not importable.
+PyMySQL==1.2.0
+# mysqlclient==2.2.7   # uncomment in an image that has the C client
