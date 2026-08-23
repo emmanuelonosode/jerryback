@@ -88,7 +88,17 @@ _TEXT_COLUMNS = {
     "currentLandlordPhone": "current_landlord_phone",
     "employerName": "employer_name",
     "jobTitle": "job_title",
-    "employerPhone": "current_landlord_phone",
+    "employerAddress": "employer_address",
+    "employerPhone": "supervisor_phone",
+    "ssn": "ssn",
+    "mothersMaidenName": "mothers_maiden_name",
+    "driversLicense": "drivers_license_number",
+    "driversLicenseState": "drivers_license_state",
+    "maritalStatus": "marital_status",
+    "previousAddress": "previous_address",
+    "previousCity": "previous_city",
+    "previousState": "previous_state",
+    "previousZip": "previous_zip",
 }
 
 _DATE_COLUMNS = {"dateOfBirth": "date_of_birth", "moveInDate": "move_in_date"}
@@ -136,6 +146,10 @@ def _sync_columns(application, data: dict) -> list[str]:
     fee = data.get("applicationFeeCents")
     if isinstance(fee, int) and fee > 0:
         put("application_fee_cents", fee)
+
+    prev_res = data.get("previousResidenceMonths")
+    if isinstance(prev_res, int) and prev_res >= 0:
+        put("previous_residence_months", prev_res)
 
     # Income: the form allows several sources, and what staff need on the record
     # is the total the applicant is declaring.

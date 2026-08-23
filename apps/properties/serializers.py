@@ -120,6 +120,8 @@ class PublicPropertyListSerializer(serializers.ModelSerializer):
     total_monthly_display = serializers.SerializerMethodField()
     primary_image = serializers.SerializerMethodField()
 
+    images = PublicImageSerializer(many=True, read_only=True)
+
     class Meta:
         model = Property
         fields = [
@@ -129,7 +131,7 @@ class PublicPropertyListSerializer(serializers.ModelSerializer):
             "bedrooms", "bathrooms", "sqft",
             "price_cents", "total_monthly_cents", "total_monthly_display",
             "voucher_accepted", "pets_allowed", "available_from",
-            "primary_image",
+            "primary_image", "images",
         ]
         read_only_fields = fields
 

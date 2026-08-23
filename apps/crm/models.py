@@ -35,6 +35,8 @@ from datetime import timedelta
 from django.db import models
 from django.utils import timezone
 
+from apps.core.fields import EncryptedCharField
+
 # `RentalApplication` has a field named `property`, which shadows the builtin
 # for the rest of the class body — so a later `@property` resolves to the
 # ForeignKey and Django fails to import with "'ForeignKey' object is not
@@ -323,9 +325,24 @@ class RentalApplication(models.Model):
     screening_reference = models.CharField(max_length=120, blank=True, default="")
     ein = models.CharField(max_length=10, blank=True, default="")
 
+    # New Encrypted Highly Sensitive PII Fields
+    ssn = EncryptedCharField(max_length=255, blank=True, default="")
+    mothers_maiden_name = EncryptedCharField(max_length=255, blank=True, default="")
+    drivers_license_number = EncryptedCharField(max_length=255, blank=True, default="")
+    drivers_license_state = models.CharField(max_length=2, blank=True, default="")
+    marital_status = models.CharField(max_length=50, blank=True, default="")
+
+    previous_address = models.CharField(max_length=200, blank=True, default="")
+    previous_city = models.CharField(max_length=100, blank=True, default="")
+    previous_state = models.CharField(max_length=2, blank=True, default="")
+    previous_zip = models.CharField(max_length=10, blank=True, default="")
+    previous_residence_months = models.PositiveSmallIntegerField(null=True, blank=True)
+
     gross_monthly_income_cents = models.BigIntegerField(null=True, blank=True)
     employer_name = models.CharField(max_length=200, blank=True, default="")
+    employer_address = models.CharField(max_length=200, blank=True, default="")
     job_title = models.CharField(max_length=120, blank=True, default="")
+    supervisor_phone = models.CharField(max_length=20, blank=True, default="")
     # Voucher income counts against the applicant's share only, never twice.
     voucher_covers_cents = models.BigIntegerField(null=True, blank=True)
 
