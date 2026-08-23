@@ -180,6 +180,9 @@ def queue_approval_email(application, invoice, breakdown) -> None:
     home = str(application.property) if application.property_id else "your home"
 
     queue_email(
+        # The applicant has been waiting on this decision; it should not sit in
+        # a queue behind a cron tick. Falls back to the queue if the send fails.
+        send_now=True,
         to_email=to_email,
         subject=f"Your application for {home} has been approved",
         body_text=(

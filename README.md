@@ -230,6 +230,31 @@ size; do not copy the SQLite file.
 
 ## Scheduled jobs
 
+Mail that somebody is waiting on — a verification code, an approval — is now
+sent **immediately**, inside the request that triggers it. The queue behind it
+is a retry net, not the delivery path: if the mail server is slow or down, the
+send fails quietly, the row stays queued, and cron picks it up. So a code
+arrives in a second, and a broken mail server still cannot fail a registration.
+
+Cron lines, for CloudPanel or crontab. Use absolute paths — cron has almost no
+environment:
+
+```cron
+* * * * *   cd /home/backend/htdocs/admin.skeltonrealtygroup.com && .venv/bin/python manage.py send_queued_email  >> /var/log/srg-mail.log 2>&1
+*/5 * * * * cd /home/backend/htdocs/admin.skeltonrealtygroup.com && .venv/bin/python manage.py process_telemetry   >> /var/log/srg-telemetry.log 2>&1
+```
+
+Overlapping runs are safe. `send_queued_email` claims each message with a
+compare-and-swap before sending, so a second run started while the first is
+still working skips what is already claimed rather than sending it twice, and
+anything left claimed by a run that died is recovered after fifteen minutes.
+
+`process_telemetry` handles 200 events per run by default. A backlog builds
+quietly if it is not scheduled — 3,326 events had accumulated before this was
+written — and the admin then shows stale visitor data with nothing to say why.
+
+
+
 Three, and the service is quietly broken without the first two.
 
 | Command | Cadence | What breaks without it |

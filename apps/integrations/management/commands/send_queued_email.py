@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 from django.conf import settings
 from django.core.mail import EmailMultiAlternatives, get_connection
 from django.core.management.base import BaseCommand
@@ -29,6 +31,15 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         now = timezone.now()
+
+        # Anything left SENDING by a run that died goes back on the queue. It is
+        # the only way a crash mid-send does not silently retire a message.
+        stranded = OutboundEmail.objects.filter(
+            status=EmailStatus.SENDING, updated_at__lt=now - timedelta(minutes=15),
+        ).update(status=EmailStatus.QUEUED)
+        if stranded:
+            self.stdout.write(f"Recovered {stranded} message(s) stuck mid-send.")
+
         queued = OutboundEmail.objects.filter(
             status=EmailStatus.QUEUED, send_after__lte=now, attempts__lt=MAX_ATTEMPTS,
         ).order_by("created_at")[: options["limit"]]
@@ -39,10 +50,25 @@ class Command(BaseCommand):
             self.stdout.write(self.style.WARNING(f"{len(queued)} message(s) queued."))
             return
 
-        sent = failed = 0
+        sent = failed = skipped = 0
         # One connection for the batch rather than one per message.
         connection = get_connection()
         for message in queued:
+            # CLAIM IT FIRST, or two overlapping runs send it twice.
+            #
+            # A one-minute cron and a slow mail server overlap routinely, and
+            # nothing here held a lock: both runs would read the same QUEUED
+            # rows and both would send them. This is a compare-and-swap - only
+            # a row still QUEUED flips to SENDING, and only the run that won
+            # the flip goes on to send it. It works on every backend, which
+            # SELECT ... FOR UPDATE does not.
+            claimed = OutboundEmail.objects.filter(
+                pk=message.pk, status=EmailStatus.QUEUED,
+            ).update(status=EmailStatus.SENDING)
+            if not claimed:
+                skipped += 1
+                continue
+
             try:
                 email = EmailMultiAlternatives(
                     subject=message.subject,
@@ -71,4 +97,7 @@ class Command(BaseCommand):
             message.save(update_fields=["status", "sent_at", "attempts"])
             sent += 1
 
-        self.stdout.write(self.style.SUCCESS(f"Sent {sent}, failed {failed}."))
+        summary = f"Sent {sent}, failed {failed}."
+        if skipped:
+            summary += f" {skipped} already claimed by another run."
+        self.stdout.write(self.style.SUCCESS(summary))

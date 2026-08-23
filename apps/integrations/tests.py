@@ -132,3 +132,120 @@ class PreviewAndRequeueTests(TestCase):
         # Reset, or a message that exhausted its retries against a broken server
         # stays failed forever after the server is fixed.
         self.assertEqual(self.email.attempts, 0)
+
+
+class InstantDeliveryTests(TestCase):
+    """
+    Mail somebody is sitting and waiting for goes out before the response,
+    without giving up the guarantee that a broken mail server cannot fail the
+    request that triggered it.
+    """
+
+    def test_send_now_delivers_immediately(self):
+        from django.test import override_settings
+        with override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend"):
+            message = queue_email(
+                to_email="a@b.com", subject="Code", body_text="123456", send_now=True,
+            )
+        self.assertEqual(message.status, EmailStatus.SENT)
+        self.assertIsNotNone(message.sent_at)
+
+    def test_without_send_now_it_waits_for_the_queue(self):
+        message = queue_email(to_email="a@b.com", subject="Bulk", body_text="Body")
+        self.assertEqual(message.status, EmailStatus.QUEUED)
+        self.assertIsNone(message.sent_at)
+
+    def test_a_broken_mail_server_leaves_it_queued_rather_than_lost(self):
+        from django.test import override_settings
+        # Port 1 refuses instantly; this is the SMTP-is-down case.
+        with override_settings(
+            EMAIL_BACKEND="django.core.mail.backends.smtp.EmailBackend",
+            EMAIL_HOST="127.0.0.1", EMAIL_PORT=1,
+        ):
+            message = queue_email(
+                to_email="a@b.com", subject="Code", body_text="123456", send_now=True,
+            )
+        self.assertEqual(message.status, EmailStatus.QUEUED)
+        self.assertIn("refused", message.last_error.lower())
+
+    def test_a_broken_mail_server_does_not_raise(self):
+        from django.test import override_settings
+        with override_settings(
+            EMAIL_BACKEND="django.core.mail.backends.smtp.EmailBackend",
+            EMAIL_HOST="127.0.0.1", EMAIL_PORT=1,
+        ):
+            # The whole reason mail was queued: an SMTP timeout during
+            # registration must not turn a 200 into a 504 after the account
+            # already exists.
+            queue_email(to_email="a@b.com", subject="S", body_text="B", send_now=True)
+
+
+class OtpDeliveryTests(TestCase):
+    def test_a_verification_code_is_sent_before_the_response_returns(self):
+        from django.test import override_settings
+        with override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend"):
+            response = self.client.post(
+                "/api/v1/auth/register/",
+                {"email": "newcomer@example.com", "password": "Skelton8",
+                 "first_name": "New", "last_name": "Renter"},
+                content_type="application/json",
+            )
+        self.assertEqual(response.status_code, 202)
+        sent = OutboundEmail.objects.get(template="otp")
+        # Not left for the next cron tick: somebody is looking at the code field.
+        self.assertEqual(sent.status, EmailStatus.SENT)
+
+    def test_an_eight_character_password_is_accepted(self):
+        from django.test import override_settings
+        with override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend"):
+            response = self.client.post(
+                "/api/v1/auth/register/",
+                {"email": "shortpw@example.com", "password": "Skelton8",
+                 "first_name": "A", "last_name": "B"},
+                content_type="application/json",
+            )
+        self.assertEqual(response.status_code, 202)
+
+
+class ConcurrentSendTests(TestCase):
+    """
+    A one-minute cron and a slow mail server overlap routinely. Nothing held a
+    lock, so both runs would read the same QUEUED rows and both would send them.
+    """
+
+    def test_a_claimed_message_is_not_sent_twice(self):
+        from django.core.management import call_command
+        from django.test import override_settings
+        from io import StringIO
+
+        message = queue_email(to_email="a@b.com", subject="S", body_text="B")
+
+        # Stand in for a run that has already claimed it and is mid-send.
+        OutboundEmail.objects.filter(pk=message.pk).update(status=EmailStatus.SENDING)
+
+        out = StringIO()
+        with override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend"):
+            call_command("send_queued_email", stdout=out)
+
+        from django.core import mail
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_a_message_stranded_by_a_crash_is_recovered(self):
+        from datetime import timedelta
+        from django.core.management import call_command
+        from django.test import override_settings
+        from django.utils import timezone
+        from io import StringIO
+
+        message = queue_email(to_email="a@b.com", subject="S", body_text="B")
+        OutboundEmail.objects.filter(pk=message.pk).update(status=EmailStatus.SENDING)
+        # Older than the recovery window: the run that claimed it is gone.
+        OutboundEmail.objects.filter(pk=message.pk).update(
+            updated_at=timezone.now() - timedelta(minutes=30),
+        )
+
+        with override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend"):
+            call_command("send_queued_email", stdout=StringIO())
+
+        message.refresh_from_db()
+        self.assertEqual(message.status, EmailStatus.SENT)

@@ -67,6 +67,11 @@ def _queue_otp_email(user, code):
     # Queued, never sent on the request thread: an SMTP timeout here would turn
     # a 200 into a 504 after the account was already created.
     queue_email(
+        # Sent before this returns. Somebody is looking at a "check your email"
+        # screen with the code field already focused; waiting on the next cron
+        # tick is the difference between finishing a registration and giving up.
+        # If the send fails the row stays queued and the retry picks it up.
+        send_now=True,
         to_email=user.email,
         subject="Your Skelton Realty Group verification code",
         body_text=(
