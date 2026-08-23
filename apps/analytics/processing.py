@@ -16,6 +16,21 @@ from django.utils import timezone
 from .models import PageVisit, RawTelemetryEvent, TelemetryEvent, Visitor, VisitorSession
 
 
+def _dimension(value):
+    """
+    A pixel measurement, or nothing.
+
+    Clamped to what a `PositiveSmallIntegerField` holds. These arrive from the
+    browser, so a hostile or broken client can send anything at all, and an
+    out-of-range integer raises at write time and kills the whole batch.
+    """
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    return number if 0 < number <= 32767 else None
+
+
 def _apply(payload: dict, now) -> None:
     fingerprint = (payload.get("fingerprint") or "").strip()
     session_id = (payload.get("sessionId") or "").strip()
@@ -42,6 +57,17 @@ def _apply(payload: dict, now) -> None:
             "landing_page": (payload.get("path") or "")[:300],
             "referrer": (payload.get("referrer") or "")[:500],
             "utm_source": (payload.get("utmSource") or "")[:100],
+            # Everything the client and the edge were already sending. It had
+            # nowhere to go until these columns existed.
+            "country": (payload.get("country") or "")[:100],
+            "region": (payload.get("region") or "")[:100],
+            "timezone": (payload.get("timezone") or "")[:64],
+            "language": (payload.get("language") or "")[:20],
+            "user_agent": (payload.get("userAgent") or "")[:300],
+            "screen_width": _dimension(payload.get("screenWidth")),
+            "screen_height": _dimension(payload.get("screenHeight")),
+            "viewport_width": _dimension(payload.get("viewportWidth")),
+            "viewport_height": _dimension(payload.get("viewportHeight")),
         },
     )
     if session_created:

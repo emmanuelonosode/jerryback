@@ -68,8 +68,29 @@ class VisitorSession(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     visitor = models.ForeignKey(Visitor, on_delete=models.CASCADE, related_name="sessions")
     session_id = models.CharField(max_length=128, unique=True)
+    # Truncated to the /24 network by `truncate_ip` before it ever reaches here
+    # — the last octet identifies a device, not a place.
     ip_address = models.CharField(max_length=64, blank=True, default="")
     city = models.CharField(max_length=100, blank=True, default="")
+
+    # THE BROWSER WAS ALREADY SENDING ALL OF THIS AND IT WAS BEING DISCARDED.
+    # `environment()` in the client has always collected the timezone, language,
+    # user agent and screen size, and `_geo()` has always resolved country and
+    # region from the CDN's edge headers. None of it had a column, so the
+    # processor dropped it on the floor and the admin could only show a city.
+    country = models.CharField(max_length=100, blank=True, default="")
+    region = models.CharField(max_length=100, blank=True, default="")
+    # IANA name, e.g. "America/Chicago". More reliable than geography for
+    # working out when somebody is actually awake.
+    timezone = models.CharField(max_length=64, blank=True, default="")
+    language = models.CharField(max_length=20, blank=True, default="")
+    user_agent = models.CharField(max_length=300, blank=True, default="")
+    screen_width = models.PositiveSmallIntegerField(null=True, blank=True)
+    screen_height = models.PositiveSmallIntegerField(null=True, blank=True)
+    # The window, which is what the layout actually responded to — a 1440px
+    # screen says nothing if the window was 700px wide.
+    viewport_width = models.PositiveSmallIntegerField(null=True, blank=True)
+    viewport_height = models.PositiveSmallIntegerField(null=True, blank=True)
     browser = models.CharField(max_length=60, blank=True, default="")
     os = models.CharField(max_length=60, blank=True, default="")
     device_type = models.CharField(max_length=40, blank=True, default="")
