@@ -378,3 +378,35 @@ def merge_favorites(request):
         added += int(created)
 
     return Response({"added": added, "total": FavoriteProperty.objects.filter(user=request.user).count()})
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def inventory_stats(request):
+    """
+    Aggregate counts, computed by the database.
+
+    EXISTS SO `/llms.txt` STOPS LOADING THE WHOLE CATALOGUE. That route wanted
+    five numbers - how many homes, how many cities, the price range - and was
+    getting them by pulling every published property across 23 paginated
+    requests and counting in JavaScript. On a 2GB host that is hundreds of
+    megabytes of objects per request, and it was a live cause of the web
+    process being OOM-killed. This is one SQL round trip.
+    """
+    queryset = Property.objects.public().with_total_monthly()
+    totals = sorted(queryset.values_list("total_monthly_cents", flat=True))
+
+    by_state = list(
+        queryset.values("state").annotate(n=Count("id")).order_by("-n")[:8]
+    )
+
+    return Response({
+        "homes": len(totals),
+        "cities": queryset.values("city", "state").distinct().count(),
+        "states": queryset.values("state").distinct().count(),
+        "min_total_cents": totals[0] if totals else None,
+        "max_total_cents": totals[-1] if totals else None,
+        "median_total_cents": totals[len(totals) // 2] if totals else None,
+        "top_states": [{"state": r["state"], "homes": r["n"]} for r in by_state],
+        "min_bedrooms": queryset.order_by("bedrooms").values_list("bedrooms", flat=True).first(),
+        "max_bedrooms": queryset.order_by("-bedrooms").values_list("bedrooms", flat=True).first(),
+    })

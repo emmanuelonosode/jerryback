@@ -11,6 +11,7 @@ urlpatterns = [
     path("favorites/<uuid:favorite_id>/", views.remove_favorite, name="remove-favorite"),
     # Public catalogue.
     path("", views.inventory, name="inventory"),
+    path("stats/", views.inventory_stats, name="inventory-stats"),
     path("cities/", views.inventory_cities, name="inventory-cities"),
     path("map_pins/", views.inventory_map_pins, name="inventory-map-pins"),
     path("<slug:slug>/", views.inventory_detail, name="inventory-detail"),
