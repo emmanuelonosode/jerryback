@@ -14,4 +14,5 @@ urlpatterns = [
     ),
     path("contact/", views.contact_inquiry, name="contact-inquiry"),
     path("alerts/", views.alert_subscription, name="alert-subscription"),
+    path("callback/", views.callback_request, name="callback-request"),
 ]

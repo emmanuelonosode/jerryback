@@ -54,6 +54,7 @@ class LeadSource(models.TextChoices):
     INSTAGRAM = "INSTAGRAM", "Instagram"
     FACEBOOK = "FACEBOOK", "Facebook"
     DIRECT = "DIRECT", "Direct"
+    CALLBACK = "CALLBACK", "Callback request"
 
 
 class LeadStatus(models.TextChoices):
@@ -77,7 +78,14 @@ class MoveInTimeline(models.TextChoices):
 class Lead(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     full_name = models.CharField(max_length=200)
-    email = models.EmailField(db_index=True)
+    # Optional, because a callback lead gives a phone number and nothing else.
+    # That is the whole point of the callback prompt: the lowest-friction way
+    # for someone who is not ready to fill in a form to reach us. Requiring an
+    # address here would mean either refusing those leads or inventing one.
+    #
+    # Anything matching leads on email must therefore guard against the blank
+    # value - "" would otherwise match every callback lead as the same person.
+    email = models.EmailField(db_index=True, blank=True, default="")
     phone = models.CharField(max_length=20, blank=True, default="")
     source = models.CharField(max_length=24, choices=LeadSource.choices, default=LeadSource.CONTACT_FORM)
     interest_type = models.CharField(max_length=8, default="RENT")

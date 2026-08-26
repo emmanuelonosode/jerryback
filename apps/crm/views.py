@@ -361,7 +361,9 @@ def contact_inquiry(request):
 
     from .models import Lead, LeadActivity, LeadSource, LeadStatus
 
-    lead = Lead.objects.filter(email__iexact=email).first()
+    # Lead.email is optional now (callback leads have only a phone), so an
+    # unguarded lookup on "" would match every one of them as one person.
+    lead = Lead.objects.filter(email__iexact=email).first() if email else None
     if not lead:
         lead = Lead.objects.create(
             full_name=full_name,
@@ -385,6 +387,68 @@ def contact_inquiry(request):
         activity_type="INQUIRY",
         note=f"Contact message: {message}",
     )
+    return Response({"status": "received", "lead_id": str(lead.id)})
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def callback_request(request):
+    """
+    A phone number and a name, from the callback prompt.
+
+    THE POINT IS THAT IT ASKS FOR ALMOST NOTHING. Someone browsing who is not
+    ready to fill in a contact form, let alone an application, will still leave
+    a number. So the only hard requirement is a phone number - the name is
+    taken when given, and the move-in timing is free text because a person
+    typing "end of the month" should not be made to pick from a dropdown.
+
+    DEDUPED ON PHONE, NOT EMAIL. These leads usually have no email at all, and
+    matching on a blank string would fold every one of them into a single
+    record. Someone who asks twice is one lead asking twice, and the second ask
+    is recorded as an activity on the same row rather than as a new person.
+    """
+    data = request.data or {}
+    phone = (data.get("phone") or "").strip()
+    full_name = (data.get("name") or data.get("full_name") or "").strip()
+    move_in = (data.get("moveIn") or "").strip()
+    page = (data.get("page") or "").strip()
+
+    digits = "".join(c for c in phone if c.isdigit())
+    # Ten digits is a US number; eleven with a leading 1 is the same number
+    # written differently. Anything shorter is a typo, not a phone number, and
+    # storing it produces a lead nobody can act on.
+    if len(digits) < 10:
+        return Response(
+            {"detail": "A phone number we can call you back on is required."},
+            status=_http.HTTP_400_BAD_REQUEST,
+        )
+
+    from .models import Lead, LeadActivity, LeadSource, LeadStatus
+
+    note = f"Callback requested from {page or 'the site'}."
+    if move_in:
+        note += f" Wants to move: {move_in}."
+
+    lead = Lead.objects.filter(phone=phone).first()
+    if lead is None:
+        lead = Lead.objects.create(
+            full_name=full_name or "Callback request",
+            email="",
+            phone=phone,
+            source=LeadSource.CALLBACK,
+            status=LeadStatus.NEW,
+            message=note,
+        )
+    else:
+        # A returning caller. Fill gaps, never overwrite something better with
+        # something worse, and put them back at the top of the queue.
+        if full_name and lead.full_name in ("", "Callback request"):
+            lead.full_name = full_name
+        lead.message = note
+        lead.status = LeadStatus.NEW
+        lead.save()
+
+    LeadActivity.objects.create(lead=lead, activity_type="INQUIRY", note=note)
     return Response({"status": "received", "lead_id": str(lead.id)})
 
 
@@ -415,7 +479,9 @@ def alert_subscription(request):
     max_price_cents = int(max_price) * 100 if max_price else None
     preferred_loc = f"{city}, {state}".strip(", ")
 
-    lead = Lead.objects.filter(email__iexact=email).first()
+    # Lead.email is optional now (callback leads have only a phone), so an
+    # unguarded lookup on "" would match every one of them as one person.
+    lead = Lead.objects.filter(email__iexact=email).first() if email else None
     if not lead:
         lead = Lead.objects.create(
             full_name=contact.split("@")[0] if is_email else f"Alert subscriber {contact}",
