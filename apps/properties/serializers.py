@@ -114,13 +114,24 @@ class PublicAmenitySerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+#: How many photographs a search-results card is allowed to carry.
+#:
+#: THE CARD IS NOT THE DETAIL PAGE. This serializer was emitting every image a
+#: home owns - eighteen on a typical record - so a twelve-card page of results
+#: shipped over two hundred image objects, 140KB of JSON, to render at most one
+#: visible photograph each. The card carousel cannot show more than a handful
+#: before a renter clicks through, and the detail serializer below still sends
+#: the full set, so nothing is lost by stopping here.
+CARD_IMAGE_LIMIT = 5
+
+
 class PublicPropertyListSerializer(serializers.ModelSerializer):
     bathrooms = serializers.FloatField(read_only=True)
     total_monthly_cents = serializers.IntegerField(read_only=True)
     total_monthly_display = serializers.SerializerMethodField()
     primary_image = serializers.SerializerMethodField()
 
-    images = PublicImageSerializer(many=True, read_only=True)
+    images = serializers.SerializerMethodField()
 
     class Meta:
         model = Property
@@ -137,6 +148,14 @@ class PublicPropertyListSerializer(serializers.ModelSerializer):
 
     def get_total_monthly_display(self, obj) -> str:
         return format_usd(obj.total_monthly_cents)
+
+    def get_images(self, obj):
+        # Sliced off the prefetched list rather than re-queried: `images` is
+        # already in memory, and `obj.images.all()[:n]` on a prefetch is a
+        # Python slice, not a second round trip.
+        return PublicImageSerializer(
+            list(obj.images.all())[:CARD_IMAGE_LIMIT], many=True, context=self.context,
+        ).data
 
     def get_primary_image(self, obj):
         # `PropertyImage` orders primary-first, so the first row is the hero.
@@ -173,6 +192,8 @@ class PublicPropertyDetailSerializer(PublicPropertyListSerializer):
             "parking", "laundry", "hvac", "flooring", "appliances",
             "tour_3d_url", "tour_video_url", "last_verified_at",
             "images", "fees", "amenities",
+            "schools", "raw_fees", "office_info", "floor_plans",
+            "listing_type", "lot_size", "condition", "cross_street", "tour_360_url", "has_pool", "allow_selfshow",
         ]
         read_only_fields = fields
 

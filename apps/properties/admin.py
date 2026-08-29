@@ -43,7 +43,7 @@ class PropertyAdmin(UnfoldModelAdmin):
     )
     list_filter = ("status", "is_published", "voucher_accepted", "pets_allowed", "state", "type")
     search_fields = ("address", "city", "zip_code", "slug", "title")
-    readonly_fields = ("slug", "original_price_cents", "created_at", "updated_at", "total_monthly_display")
+    readonly_fields = ("slug", "original_price_cents", "created_at", "updated_at", "total_monthly_display", "schools", "raw_fees", "office_info", "floor_plans")
     inlines = [PropertyImageInline, PropertyFeeInline, PropertyAmenityInline]
     actions = ["mark_verified", "publish", "unpublish"]
     fieldsets = (
@@ -71,6 +71,7 @@ class PropertyAdmin(UnfoldModelAdmin):
                            "search filter. It is not in any partner feed, so it is maintained here.",
         }),
         ("Availability", {"fields": ("available_from", "leased_at", "last_verified_at", "agent")}),
+        ("Raw Sync Data", {"fields": ("schools", "raw_fees", "office_info", "floor_plans")}),
         ("Merchandising", {"fields": ("is_featured", "homepage_featured")}),
     )
 

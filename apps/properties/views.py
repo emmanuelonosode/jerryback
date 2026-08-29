@@ -16,7 +16,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from .models import FavoriteProperty
+from .models import RENTABLE_STATUSES, FavoriteProperty
 from .serializers import FavoriteSerializer
 
 
@@ -166,19 +166,44 @@ _ORDERINGS = {
 }
 
 
-@api_view(["GET"])
-@permission_classes([AllowAny])
-def inventory(request):
-    queryset = (
-        Property.objects.public()
-        .with_total_monthly()
-        .prefetch_related("images")
-        .order_by("-is_featured", "-created_at")
-    )
+def _apply_filters(request, queryset):
+    """
+    Every catalogue filter the search UI can send, applied to a queryset.
 
+    EXTRACTED SO THE MAP CANNOT DISAGREE WITH THE LIST. `/pins/` has to answer
+    "where is everything this search matched", and the only way it stays the
+    same set the cards came from is by running the identical predicate chain.
+    A second hand-maintained copy drifts on the first filter anybody adds, and
+    the symptom - dots on the map for homes the list says do not match - is the
+    kind of thing nobody reports as a bug, they just stop trusting the map.
+
+    Returns `(queryset, searched)`; `searched` says whether free text imposed a
+    relevance ordering that an explicit sort should not silently override.
+    """
     # Free text first: it reorders the queryset, and the ordering it applies
     # must survive everything below it.
     queryset, searched = _apply_search(queryset, request.query_params.get("q", ""))
+
+    """
+    An explicit id list, for the saved-homes page.
+
+    That page holds up to 50 ids in a cookie and used to resolve them by
+    fetching the entire catalogue and running `Array.find` fifty times. Capped
+    at MAX_SAVED so this cannot become a catalogue export with extra steps, and
+    silently dropping anything that is not a UUID rather than raising - a
+    tampered cookie should return fewer homes, not a 500.
+    """
+    ids = request.query_params.get("ids", "").strip()
+    if ids:
+        import uuid as _uuid
+
+        wanted = []
+        for raw in ids.split(",")[:50]:
+            try:
+                wanted.append(_uuid.UUID(raw.strip()))
+            except (ValueError, AttributeError):
+                continue
+        queryset = queryset.filter(id__in=wanted) if wanted else queryset.none()
 
     city = request.query_params.get("city", "").strip()
     if city:
@@ -228,6 +253,20 @@ def inventory(request):
     if request.query_params.get("pets_allowed") == "true":
         queryset = queryset.filter(pets_allowed=True)
 
+    return queryset, searched
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def inventory(request):
+    queryset = (
+        Property.objects.public()
+        .with_total_monthly()
+        .prefetch_related("images")
+        .order_by("-is_featured", "-created_at")
+    )
+    queryset, searched = _apply_filters(request, queryset)
+
     # Every ordering ends with `id` so that homes tying on the sort key keep a
     # stable order across pages. Without it Postgres may return the same row on
     # page 1 and page 2 and drop another entirely.
@@ -244,23 +283,157 @@ def inventory(request):
     )
 
 
+#: A hard ceiling on one pin response, so this can never become a full export.
+#:
+#: Sized above the live catalogue (8,841 homes with coordinates) rather than
+#: below it, because clipping the map would be the exact failure this endpoint
+#: exists to fix. It is a runaway guard, not a page size.
+MAX_PINS = 25_000
+
+#: Coordinate precision, in decimal places. Five is about a metre - far finer
+#: than a marker is drawn - and truncating there removes roughly a fifth of the
+#: payload for no visible difference.
+PIN_PRECISION = 5
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def inventory_pins(request):
+    """
+    Every home a search matched, as coordinates. No photographs, no prose.
+
+    WHY THIS EXISTS. The map was drawing the twelve homes on the current page
+    of results, so a renter looking at a national catalogue saw twelve dots and
+    concluded that was the inventory. Showing all of it through the normal
+    catalogue endpoint is not an option: that payload is a megabyte per two
+    hundred homes, almost all of it image metadata the map cannot draw.
+
+    WHAT A PIN IS. Latitude, longitude, the all-in monthly figure, bedrooms and
+    the slug - the least that lets a dot be positioned, labelled and clicked
+    through to the home. At 8,841 homes that is 566KB of JSON, 228KB gzipped,
+    against 45MB for the same set fetched as full listings.
+
+    WHY ARRAYS RATHER THAN OBJECTS. Repeating five key names on nine thousand
+    rows is a quarter of the payload spent restating the schema. `fields`
+    names the tuple positions once, so the client stays readable and the wire
+    format stays small.
+
+    THE SLUG IS INCLUDED DELIBERATELY. It is the single largest component of
+    the response - 274KB of the 566KB - and dropping it would mean a round trip
+    to Django before a clicked dot could go anywhere. A link that works
+    immediately is worth the bytes, particularly once gzip has had them.
+    """
+    queryset = (
+        Property.objects.public()
+        .with_total_monthly()
+        .filter(latitude__isnull=False, longitude__isnull=False)
+    )
+    queryset, _searched = _apply_filters(request, queryset)
+
+    # Ordering is meaningless for a point cloud and a sort over nine thousand
+    # rows is not free, so the model's default `-created_at` is cleared.
+    rows = queryset.order_by().values_list(
+        "latitude", "longitude", "total_monthly_cents", "bedrooms", "slug",
+    )[:MAX_PINS]
+
+    pins = [
+        [round(float(lat), PIN_PRECISION), round(float(lng), PIN_PRECISION),
+         cents, beds, slug]
+        for lat, lng, cents, beds, slug in rows
+    ]
+
+    response = Response({
+        "fields": ["lat", "lng", "total_monthly_cents", "bedrooms", "slug"],
+        "count": len(pins),
+        "truncated": len(pins) >= MAX_PINS,
+        "pins": pins,
+    })
+    # Inventory changes when a person edits it. A minute of browser cache and
+    # five of shared cache means panning and zooming the map costs nothing,
+    # and a filter change is a different URL so it is never served stale.
+    response["Cache-Control"] = "public, max-age=60, s-maxage=300"
+    return response
+
+
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def inventory_cities(request):
     """
-    Cities with LIVE inventory, for the location hubs and the sitemap.
+    Cities we have pages for, with two counts that mean different things.
 
-    `rentable()`, not `public()`: a leased home stays publicly visible at its
-    own URL so an inbound link does not 404, but counting it here would tell a
-    renter there are homes in a city where there is nothing to rent.
+    `count` is RENTABLE inventory - available and coming-soon. It is what the
+    hub threshold measures and what a renter is told, because saying "12 homes
+    in Memphis" when all twelve are leased is a lie a visitor discovers one
+    click later.
+
+    `public_count` includes homes inside their leased grace window. It exists
+    because a city hub must keep EXISTING while any of its homes are still
+    publicly reachable. The frontend previously derived hubs from the full
+    catalogue, which is `public()`, so dropping to `rentable()` here silently
+    404'd every city whose inventory had all been let - taking a page that was
+    indexed and had inbound links out of the index rather than showing it with
+    an honest "nothing available right now" and the nearest alternatives.
     """
+    from django.db.models import Sum
+
     rows = (
-        Property.objects.rentable()
+        Property.objects.public()
         .values("city", "state")
-        .annotate(count=Count("id"))
+        .annotate(
+            public_count=Count("id"),
+            count=Sum(
+                Case(
+                    When(status__in=RENTABLE_STATUSES, then=1),
+                    default=0,
+                    output_field=IntegerField(),
+                )
+            ),
+        )
         .order_by("-count", "city")
     )
-    return Response(list(rows))
+    return Response([
+        {
+            "city": r["city"],
+            "state": r["state"],
+            "count": r["count"] or 0,
+            "public_count": r["public_count"],
+        }
+        for r in rows
+    ])
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def inventory_sitemap(request):
+    """
+    Every indexable home as a slug and a timestamp. Nothing else.
+
+    EXISTS FOR THE SAME REASON `inventory_stats` DOES. The frontend built its
+    sitemap by fetching all 4,482 properties - with their 78,417 image rows,
+    fee schedules and descriptions - mapping each through `toListing`, then
+    reading two fields off the result. Hundreds of megabytes of objects to emit
+    a list of URLs, on a host with a 1GB Node heap, and a direct cause of the
+    web process being OOM-killed.
+
+    `public()`, not `rentable()`: a leased home keeps its page for a grace
+    window so an inbound link does not 404, and while that page is indexable it
+    belongs in the sitemap. The frontend applies the same rule when it decides
+    whether to emit `noindex`, and the two must not disagree - a URL that is in
+    the sitemap and also noindexed is the contradiction the indexation audit
+    exists to catch.
+
+    `values()` so Django never builds a model instance, and `iterator()` so the
+    result set is streamed rather than held twice.
+    """
+    rows = (
+        Property.objects.public()
+        .order_by("-updated_at")
+        .values("slug", "updated_at")
+    )
+    return Response([
+        {"slug": r["slug"], "updated_at": r["updated_at"].isoformat() if r["updated_at"] else None}
+        for r in rows.iterator(chunk_size=2000)
+    ])
 
 
 @api_view(["GET"])

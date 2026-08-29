@@ -13,6 +13,11 @@ urlpatterns = [
     path("", views.inventory, name="inventory"),
     path("stats/", views.inventory_stats, name="inventory-stats"),
     path("cities/", views.inventory_cities, name="inventory-cities"),
+    # Slugs and timestamps only, for the frontend sitemap.
+    path("sitemap/", views.inventory_sitemap, name="inventory-sitemap"),
+    # Every matching home as a coordinate, for the search map. Declared before
+    # the slug route so "pins" is never read as a property slug.
+    path("pins/", views.inventory_pins, name="inventory-pins"),
     path("map_pins/", views.inventory_map_pins, name="inventory-map-pins"),
     path("<slug:slug>/", views.inventory_detail, name="inventory-detail"),
 ]

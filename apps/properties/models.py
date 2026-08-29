@@ -192,8 +192,26 @@ class Property(models.Model):
     flooring = models.CharField(max_length=120, blank=True, default="")
     appliances = models.JSONField(default=list, blank=True)
 
+    # Supabase raw JSON payload storage
+    schools = models.JSONField(default=list, blank=True, null=True)
+    raw_fees = models.JSONField(default=list, blank=True, null=True)
+    office_info = models.JSONField(default=dict, blank=True, null=True)
+    floor_plans = models.JSONField(default=list, blank=True, null=True)
+
     # Validated against a provider allowlist before the public site frames
     # them — an embed URL is untrusted input even when staff typed it.
+
+    listing_type = models.CharField(max_length=50, default="for-rent")
+    lot_size = models.PositiveIntegerField(null=True, blank=True)
+    condition = models.CharField(max_length=100, blank=True, default="")
+    cross_street = models.CharField(max_length=200, blank=True, default="")
+    tour_360_url = models.URLField(max_length=500, blank=True, default="")
+    has_pool = models.BooleanField(default=False)
+    allow_selfshow = models.BooleanField(default=False)
+    source_url = models.URLField(max_length=500, blank=True, default="")
+    api_endpoint = models.URLField(max_length=500, blank=True, default="")
+    raw_data = models.JSONField(default=dict, blank=True, null=True)
+
     tour_3d_url = models.URLField(max_length=500, blank=True, default="")
     tour_video_url = models.URLField(max_length=500, blank=True, default="")
 

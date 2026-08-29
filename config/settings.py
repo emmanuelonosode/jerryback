@@ -101,6 +101,16 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    # The catalogue is JSON, and JSON is the most compressible thing we serve:
+    # the map-pin payload is 566KB on the wire uncompressed and 228KB gzipped,
+    # and a page of search results roughly a fifth of its raw size. Without
+    # this every listing byte crosses the network in full, which on a phone is
+    # the difference between a map that appears and one that arrives.
+    #
+    # BREACH: Django masks the CSRF token per response, which is the mitigation
+    # the advisory calls for, and everything this compresses on the public API
+    # is unauthenticated read-only inventory with no secret in it.
+    "django.middleware.gzip.GZipMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
     # Must precede CommonMiddleware so preflight requests get their headers.
     "corsheaders.middleware.CorsMiddleware",
