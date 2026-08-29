@@ -274,6 +274,14 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 # noise floor of bots probing /admin/. Not security on its own.
 ADMIN_PATH = env("ADMIN_PATH", default="")
 
+# Hosts whose requests are our own web server rather than a member of the
+# public. Loopback is always trusted; this names anything else - on a
+# single-box deployment that is the box's own public address, because the
+# frontend reaches the API through its public hostname.
+INTERNAL_API_IPS = [
+    ip.strip() for ip in env.str("INTERNAL_API_IPS", default="").split(",") if ip.strip()
+]
+
 # --- REST framework ----------------------------------------------------------
 
 REST_FRAMEWORK = {
@@ -288,7 +296,8 @@ REST_FRAMEWORK = {
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 24,
     "DEFAULT_THROTTLE_CLASSES": [
-        "rest_framework.throttling.AnonRateThrottle",
+        # Our own server-side renderer is exempt; see apps/core/throttling.py.
+        "apps.core.throttling.InternalExemptAnonThrottle",
         "rest_framework.throttling.UserRateThrottle",
     ],
     "DEFAULT_THROTTLE_RATES": {

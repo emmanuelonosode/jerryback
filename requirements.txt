@@ -24,3 +24,8 @@ cryptography==50.0.0
 # to it automatically when mysqlclient is not importable.
 PyMySQL==1.2.0
 # mysqlclient==2.2.7   # uncomment in an image that has the C client
+
+# The Supabase sync speaks HTTP. It was imported by the sync command and never
+# declared, so the nightly job died with ModuleNotFoundError on a fresh venv -
+# which is why the catalogue had been eight days stale.
+requests>=2.32
