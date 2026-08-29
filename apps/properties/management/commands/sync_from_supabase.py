@@ -28,6 +28,7 @@ Anything previously synced and now absent is retired at the end of the run.
 from __future__ import annotations
 
 import os
+import re
 import time
 
 import requests
@@ -54,6 +55,25 @@ PAGE = 100
 # Feed fee rows that merely restate the rent. Counting them would double the
 # advertised total; the model has the same guard for the same reason.
 RENT_RESTATEMENTS = {"base rent", "base monthly rent", "rent", "monthly rent"}
+
+
+def _natural_key(address: str, zip_code: str) -> str:
+    """
+    The identity of a home, independent of whatever slug it was first given.
+
+    THE SLUG IS NOT AN IDENTITY. Two importers gave the same houses two
+    different slugs - an older run prefixed them `srg-`, the current feed does
+    not - and matching on slug therefore treated 3,093 already-listed homes as
+    brand new while retiring the records Google had indexed. Every one of those
+    4,476 indexed URLs went `noindex` in a single run, and 4,643 URLs Google
+    had never seen replaced them.
+
+    Address plus ZIP is what actually identifies a house. Normalised hard,
+    because the same address arrives as "1465 Lake Lucerne Rd SW" and
+    "1465 lake lucerne rd sw" from different passes.
+    """
+    normalised = re.sub(r"[^a-z0-9]+", " ", f"{address} {zip_code}".lower()).strip()
+    return re.sub(r"\s+", " ", normalised)
 
 
 def _date(value):
@@ -328,18 +348,36 @@ class Command(BaseCommand):
         self.stdout.write(f"  {len(rows)} available properties in the feed")
 
         created = updated = unchanged = failed = 0
-        seen_slugs: set[str] = set()
+        seen_ids: set = set()
+
+        # One pass over what we already hold, so the loop below can ask "is this
+        # house already listed" without a query per feed row.
+        existing_by_key = {}
+        for row in Property.objects.values("id", "address", "zip_code", "slug"):
+            existing_by_key.setdefault(
+                _natural_key(row["address"] or "", row["zip_code"] or ""), row["id"]
+            )
+
 
         for p in rows:
             slug = p.get("slug")
             if not slug:
                 continue
-            seen_slugs.add(slug)
+
 
             defaults = self._defaults_for(p, agent.id)
             try:
                 with transaction.atomic():
+                    # By slug first - the fast path once a home is settled -
+                    # then by what the home actually is. An existing record
+                    # KEEPS ITS OWN SLUG: it is the URL in the sitemap, in
+                    # Google's index, and in whatever links point at it.
                     prop = Property.objects.filter(slug=slug).first()
+                    if prop is None:
+                        match_id = existing_by_key.get(
+                            _natural_key(defaults["address"], defaults["zip_code"])
+                        )
+                        prop = Property.objects.filter(pk=match_id).first() if match_id else None
                     is_new = prop is None
 
                     if is_new:
@@ -383,6 +421,8 @@ class Command(BaseCommand):
                         if self._sync_children(prop, model, incoming, dry):
                             children_changed = True
 
+                    seen_ids.add(prop.pk)
+
                     if is_new:
                         created += 1
                     elif field_changed or children_changed:
@@ -400,8 +440,8 @@ class Command(BaseCommand):
                 self.stderr.write(f"  {slug}: {error}")
 
         retired = 0
-        if not options["no_retire"] and seen_slugs:
-            stale = Property.objects.filter(status="available").exclude(slug__in=seen_slugs)
+        if not options["no_retire"] and seen_ids:
+            stale = Property.objects.filter(status="available").exclude(pk__in=seen_ids)
             retired = stale.count()
             if retired and not dry:
                 # Retired, not deleted: the page stays reachable for its grace
