@@ -260,7 +260,7 @@ def _apply_filters(request, queryset):
 @permission_classes([AllowAny])
 def inventory(request):
     queryset = (
-        Property.objects.public()
+        Property.objects.rentable()
         .with_total_monthly()
         .prefetch_related("images")
         .order_by("-is_featured", "-created_at")
@@ -324,7 +324,7 @@ def inventory_pins(request):
     immediately is worth the bytes, particularly once gzip has had them.
     """
     queryset = (
-        Property.objects.public()
+        Property.objects.rentable()
         .with_total_monthly()
         .filter(latitude__isnull=False, longitude__isnull=False)
     )
@@ -468,7 +468,7 @@ def inventory_map_pins(request):
         )
 
     queryset = (
-        Property.objects.public()
+        Property.objects.rentable()
         .with_total_monthly()
         .filter(
             latitude__isnull=False, longitude__isnull=False,
@@ -570,7 +570,7 @@ def inventory_stats(request):
     megabytes of objects per request, and it was a live cause of the web
     process being OOM-killed. This is one SQL round trip.
     """
-    queryset = Property.objects.public().with_total_monthly()
+    queryset = Property.objects.rentable().with_total_monthly()
     totals = sorted(queryset.values_list("total_monthly_cents", flat=True))
 
     by_state = list(
