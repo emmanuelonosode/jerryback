@@ -52,6 +52,10 @@ SUPABASE_KEY = os.environ.get(
 
 PAGE = 100
 
+# Past this share of live inventory, a retirement pass is treated as a fault
+# rather than as turnover. See the circuit breaker in `handle`.
+RETIRE_CEILING = 0.20
+
 # Feed fee rows that merely restate the rent. Counting them would double the
 # advertised total; the model has the same guard for the same reason.
 RENT_RESTATEMENTS = {"base rent", "base monthly rent", "rent", "monthly rent"}
@@ -149,6 +153,14 @@ class Command(BaseCommand):
             "--no-retire",
             action="store_true",
             help="Skip retiring properties that have left the feed.",
+        )
+        parser.add_argument(
+            "--force",
+            action="store_true",
+            help=(
+                "Retire even when the count exceeds the safety ceiling. "
+                "Only for a genuine mass withdrawal."
+            ),
         )
 
     # -- fetching -----------------------------------------------------------
@@ -352,21 +364,39 @@ class Command(BaseCommand):
 
         # One pass over what we already hold, so the loop below can ask "is this
         # house already listed" without a query per feed row.
-        existing_by_key = {}
-        # OLDEST FIRST, so the record that has been live longest wins a tie.
-        # Where a house exists twice - two importers, two slugs - the original
-        # is the one search engines have indexed and linked, and it is the one
-        # that must survive. `setdefault` then keeps it and ignores the rest.
-        # PUBLISHED RECORDS ONLY. An unpublished or withdrawn row is not a
-        # listing, and matching a feed row onto one hands the house a URL that
-        # is deliberately not being served - which would silently resurrect
-        # whatever was parked there.
+        """
+        TWO INDEXES, BECAUSE A SLUG THAT CHANGES IS A URL THAT DIES.
+
+        Matching a feed row onto the wrong record - or onto none - creates a
+        second listing for a house that already has one, retires the original,
+        and hands Google a 404 where an indexed page used to be. That happened
+        once here, to 4,476 URLs, and these two indexes exist so it cannot
+        happen again from either direction:
+
+          by_source  the feed's own permanent link to the house. The strongest
+                     key there is, and immune to the address being reformatted
+                     ("123 Main St" becoming "123 Main Street, Unit A"), which
+                     is the most likely way a natural key silently breaks.
+
+          by_place   address plus ZIP, normalised. The only thing that links a
+                     record imported before `source_url` was captured - the
+                     3,094 `srg-` homes - to the feed row for the same house.
+
+        PUBLISHED RECORDS ONLY, and oldest first. An unpublished row is not a
+        listing, and where a house exists twice the original is the one search
+        engines indexed, so `setdefault` keeps it.
+        """
+        by_source: dict[str, object] = {}
+        by_place: dict[str, object] = {}
         for row in (
             Property.objects.filter(is_published=True)
             .order_by("created_at", "id")
-            .values("id", "address", "zip_code", "slug")
+            .values("id", "address", "zip_code", "source_url", "api_endpoint")
         ):
-            existing_by_key.setdefault(
+            for url in (row["source_url"], row["api_endpoint"]):
+                if url:
+                    by_source.setdefault(url.strip().rstrip("/"), row["id"])
+            by_place.setdefault(
                 _natural_key(row["address"] or "", row["zip_code"] or ""), row["id"]
             )
 
@@ -391,9 +421,16 @@ class Command(BaseCommand):
                     # An existing record KEEPS ITS OWN SLUG either way: it is
                     # the URL in the sitemap, in the index, and in every link
                     # pointing at it.
-                    match_id = existing_by_key.get(
-                        _natural_key(defaults["address"], defaults["zip_code"])
-                    )
+                    match_id = None
+                    for url in (defaults.get("source_url"), defaults.get("api_endpoint")):
+                        if url:
+                            match_id = by_source.get(url.strip().rstrip("/"))
+                            if match_id:
+                                break
+                    if match_id is None:
+                        match_id = by_place.get(
+                            _natural_key(defaults["address"], defaults["zip_code"])
+                        )
                     prop = Property.objects.filter(pk=match_id).first() if match_id else None
                     if prop is None:
                         prop = Property.objects.filter(slug=slug).first()
@@ -462,7 +499,35 @@ class Command(BaseCommand):
         if not options["no_retire"] and seen_ids:
             stale = Property.objects.filter(status="available").exclude(pk__in=seen_ids)
             retired = stale.count()
-            if retired and not dry:
+            live_before = Property.objects.filter(status="available").count()
+
+            """
+            THE CIRCUIT BREAKER.
+
+            Retiring a home takes its page out of the sitemap immediately and,
+            45 days later, turns its URL into a 404. Doing that to a handful of
+            homes a night is the job working; doing it to thousands is a bug,
+            and this command has already had one - a matching fault read every
+            house as new and retired all 4,476 indexed URLs in a single run.
+
+            Normal turnover on this catalogue is single-digit percent a night.
+            Anything past a fifth of live inventory is not turnover, it is the
+            feed having failed or the matching having broken, and the right
+            response is to stop and say so rather than to quietly destroy a
+            year of indexing. `--force` is there for the day it really is a
+            mass withdrawal.
+            """
+            share = retired / live_before if live_before else 0
+            if share > RETIRE_CEILING and not options["force"]:
+                self.stderr.write(self.style.ERROR(
+                    f"REFUSING TO RETIRE {retired} of {live_before} live homes "
+                    f"({share:.0%}). That is past the {RETIRE_CEILING:.0%} ceiling and "
+                    f"looks like a feed or matching failure rather than turnover. "
+                    f"Nothing was retired. Re-run with --force if this is genuinely "
+                    f"a mass withdrawal."
+                ))
+                retired = 0
+            elif retired and not dry:
                 # Retired, not deleted: the page stays reachable for its grace
                 # window so an inbound link lands somewhere useful.
                 stale.update(status="leased", leased_at=started, updated_at=started)

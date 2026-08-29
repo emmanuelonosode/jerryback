@@ -102,3 +102,44 @@ class DiscountTests(SimpleTestCase):
         # become a negative rent.
         for empty in (0, None, -1):
             self.assertEqual(discounted_rent(empty), 0)
+
+
+class HomeIdentityTests(SimpleTestCase):
+    """
+    What stops a slug changing, which is what stops a URL dying.
+
+    A feed row that fails to match its existing record produces a second
+    listing for the same house and retires the first - so an indexed URL 404s
+    and a new one Google has never seen replaces it. That happened to 4,476
+    URLs here. These are the guards.
+    """
+
+    def test_the_same_house_keys_the_same_however_it_is_written(self):
+        from apps.properties.management.commands.sync_from_supabase import _natural_key
+
+        canonical = _natural_key("1465 Lake Lucerne Rd SW", "30047")
+        for address, zip_code in (
+            ("1465 lake lucerne rd sw", "30047"),
+            ("1465  Lake   Lucerne  Rd  SW", "30047"),
+            ("1465 Lake Lucerne Rd. SW", "30047"),
+            ("  1465 Lake Lucerne Rd SW  ", " 30047 "),
+        ):
+            self.assertEqual(_natural_key(address, zip_code), canonical, address)
+
+    def test_different_houses_do_not_collide(self):
+        from apps.properties.management.commands.sync_from_supabase import _natural_key
+
+        # Same street, different number, and same number in a different ZIP.
+        a = _natural_key("1465 Lake Lucerne Rd SW", "30047")
+        b = _natural_key("1467 Lake Lucerne Rd SW", "30047")
+        c = _natural_key("1465 Lake Lucerne Rd SW", "30046")
+        self.assertNotEqual(a, b)
+        self.assertNotEqual(a, c)
+
+    def test_retire_ceiling_is_set_below_a_catastrophe(self):
+        from apps.properties.management.commands.sync_from_supabase import RETIRE_CEILING
+
+        # Normal nightly turnover on this catalogue is single-digit percent.
+        # The ceiling has to sit above that and well below "the feed broke".
+        self.assertGreater(RETIRE_CEILING, 0.05)
+        self.assertLess(RETIRE_CEILING, 0.5)
