@@ -415,18 +415,23 @@ def inventory_sitemap(request):
     a list of URLs, on a host with a 1GB Node heap, and a direct cause of the
     web process being OOM-killed.
 
-    `public()`, not `rentable()`: a leased home keeps its page for a grace
-    window so an inbound link does not 404, and while that page is indexable it
-    belongs in the sitemap. The frontend applies the same rule when it decides
-    whether to emit `noindex`, and the two must not disagree - a URL that is in
-    the sitemap and also noindexed is the contradiction the indexation audit
-    exists to catch.
+    `rentable()`, NOT `public()`, and the distinction is the whole point.
+
+    A leased home keeps its page for a 45-day grace window so an inbound link
+    lands somewhere useful instead of on a 404 - but the frontend serves that
+    page `noindex, follow`, because a home nobody can rent should stop
+    competing in search. Listing it here as well would tell Google to index a
+    URL the page itself forbids indexing: the exact contradiction the
+    indexation audit exists to catch, on 1,388 URLs.
+
+    Reachable and indexable are different states. This endpoint answers the
+    second.
 
     `values()` so Django never builds a model instance, and `iterator()` so the
     result set is streamed rather than held twice.
     """
     rows = (
-        Property.objects.public()
+        Property.objects.rentable()
         .order_by("-updated_at")
         .values("slug", "updated_at")
     )
