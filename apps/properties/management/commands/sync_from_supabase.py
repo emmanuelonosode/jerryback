@@ -357,8 +357,13 @@ class Command(BaseCommand):
         # Where a house exists twice - two importers, two slugs - the original
         # is the one search engines have indexed and linked, and it is the one
         # that must survive. `setdefault` then keeps it and ignores the rest.
+        # PUBLISHED RECORDS ONLY. An unpublished or withdrawn row is not a
+        # listing, and matching a feed row onto one hands the house a URL that
+        # is deliberately not being served - which would silently resurrect
+        # whatever was parked there.
         for row in (
-            Property.objects.order_by("created_at", "id")
+            Property.objects.filter(is_published=True)
+            .order_by("created_at", "id")
             .values("id", "address", "zip_code", "slug")
         ):
             existing_by_key.setdefault(
