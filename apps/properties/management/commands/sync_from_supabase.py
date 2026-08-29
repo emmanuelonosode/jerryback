@@ -380,16 +380,23 @@ class Command(BaseCommand):
             defaults = self._defaults_for(p, agent.id)
             try:
                 with transaction.atomic():
-                    # By slug first - the fast path once a home is settled -
-                    # then by what the home actually is. An existing record
-                    # KEEPS ITS OWN SLUG: it is the URL in the sitemap, in
-                    # Google's index, and in whatever links point at it.
-                    prop = Property.objects.filter(slug=slug).first()
+                    # ADDRESS FIRST, SLUG SECOND, and the order is the whole
+                    # point. A house is identified by where it is; the slug is
+                    # only the URL it happens to have been given. Looking up by
+                    # slug first meant a feed row found whichever record last
+                    # claimed that slug, rather than the live listing for that
+                    # address - so a second import created a duplicate and
+                    # retired the record search engines had indexed.
+                    #
+                    # An existing record KEEPS ITS OWN SLUG either way: it is
+                    # the URL in the sitemap, in the index, and in every link
+                    # pointing at it.
+                    match_id = existing_by_key.get(
+                        _natural_key(defaults["address"], defaults["zip_code"])
+                    )
+                    prop = Property.objects.filter(pk=match_id).first() if match_id else None
                     if prop is None:
-                        match_id = existing_by_key.get(
-                            _natural_key(defaults["address"], defaults["zip_code"])
-                        )
-                        prop = Property.objects.filter(pk=match_id).first() if match_id else None
+                        prop = Property.objects.filter(slug=slug).first()
                     is_new = prop is None
 
                     if is_new:
