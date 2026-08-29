@@ -353,7 +353,14 @@ class Command(BaseCommand):
         # One pass over what we already hold, so the loop below can ask "is this
         # house already listed" without a query per feed row.
         existing_by_key = {}
-        for row in Property.objects.values("id", "address", "zip_code", "slug"):
+        # OLDEST FIRST, so the record that has been live longest wins a tie.
+        # Where a house exists twice - two importers, two slugs - the original
+        # is the one search engines have indexed and linked, and it is the one
+        # that must survive. `setdefault` then keeps it and ignores the rest.
+        for row in (
+            Property.objects.order_by("created_at", "id")
+            .values("id", "address", "zip_code", "slug")
+        ):
             existing_by_key.setdefault(
                 _natural_key(row["address"] or "", row["zip_code"] or ""), row["id"]
             )
