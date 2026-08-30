@@ -205,6 +205,40 @@ def _apply_filters(request, queryset):
                 continue
         queryset = queryset.filter(id__in=wanted) if wanted else queryset.none()
 
+    """
+    A geographic box, so the results list can follow the map.
+
+    Clicking a cluster zooms the map onto one region. Without this the cards
+    beside it kept listing the whole catalogue, so the map showed Orlando and
+    the list showed everything - the two halves of one search disagreeing.
+
+    Shared with `/pins/` through this function, which is the point: the dots
+    and the cards must always be the same set. A partial box is ignored rather
+    than half-applied, and a home with no coordinates drops out of a
+    geographic search because there is no honest way to place it.
+    """
+    box = {name: request.query_params.get(name) for name in ("north", "south", "east", "west")}
+    if all(box.values()):
+        try:
+            north, south = float(box["north"]), float(box["south"])
+            east, west = float(box["east"]), float(box["west"])
+        except (TypeError, ValueError):
+            north = south = east = west = None
+        if north is not None:
+            queryset = queryset.filter(
+                latitude__isnull=False,
+                longitude__isnull=False,
+                latitude__lte=north,
+                latitude__gte=south,
+            )
+            # A box spanning the antimeridian has west > east, and the two
+            # halves have to be OR'd rather than AND'd or it matches nothing.
+            queryset = (
+                queryset.filter(longitude__gte=west, longitude__lte=east)
+                if west <= east
+                else queryset.filter(Q(longitude__gte=west) | Q(longitude__lte=east))
+            )
+
     city = request.query_params.get("city", "").strip()
     if city:
         queryset = queryset.filter(city__iexact=city)
