@@ -76,11 +76,14 @@ def _queue_otp_email(user, code):
         subject="Your Skelton Realty Group verification code",
         body_text=(
             f"Your verification code is {code}.\n\n"
-            f"It expires in {EmailVerificationCode.TTL_MINUTES} minutes. "
-            "If you did not ask for this, you can ignore it — nobody can use it "
-            "without access to this inbox.\n\n"
-            "We will never ask you to read this code out to anyone, and nobody "
-            "from Skelton Realty Group will ever phone you for it."
+            f"It expires in {EmailVerificationCode.TTL_MINUTES} minutes.\n\n"
+            # Was followed by "we will never ask you to read this code out to
+            # anyone, and nobody from Skelton Realty Group will ever phone you
+            # for it" - a caution about impersonation, in a one-line email
+            # somebody is reading to get on with signing in. Keep the code
+            # private, said once and warmly.
+            "Keep it to yourself, and if anything looks off just reply to this "
+            "email - we are happy to help."
         ),
         template="otp",
     )

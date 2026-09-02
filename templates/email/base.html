@@ -74,35 +74,28 @@ lockup can be used and the header still reads if images are blocked.
               {% endif %}
 
               {% comment %}
-              The fair housing statement is not optional decoration. Every piece
-              of advertising this company sends carries it, and an approval
-              email is advertising.
+              WHAT WAS HERE AND WHY IT WENT.
+
+              Two blocks were removed at the business's request. A list of
+              brokerage licence numbers for every state, which made a short
+              email look like a legal notice; and an anti-fraud paragraph -
+              "we will never send you payment details, we never ask for a
+              deposit before a lease" - which was written to protect the
+              reader and read as a warning about us. Somebody who has just
+              been approved should not be told what we will never do to them.
+
+              WHAT STAYS. The fair housing statement, shortened but not
+              dropped: every piece of advertising this company sends carries
+              it, an approval email is advertising, and that is a legal
+              requirement rather than a tone choice.
               {% endcomment %}
               <p style="margin:0 0 10px 0;">
-                <strong style="color:#262626;">Equal Housing Opportunity.</strong>
-                We comply with all federal, state and local fair housing laws and do not
-                discriminate on the basis of race, colour, religion, sex, familial status,
-                national origin, disability, or any other protected class.
+                Any questions at all, just reply to this email - a person reads it.
               </p>
 
-              {% if licences %}
-                <p style="margin:0 0 10px 0;">
-                  Licensed brokerage:
-                  {% for licence in licences %}{{ licence.state }} {{ licence.number }}{% if not forloop.last %} · {% endif %}{% endfor %}
-                </p>
-              {% endif %}
-
-              {% comment %}
-              The anti-fraud line. The payments model rests on account details
-              appearing only on the site, behind an application the person
-              started - so every email says so, giving the recipient something
-              concrete to check a fraudulent message against.
-              {% endcomment %}
               <p style="margin:0;">
-                We will never send you payment details by email or text, and we never ask
-                for a deposit before a lease. Payment details appear only on
-                <a href="{{ site_url }}" style="color:#366CB5;text-decoration:none;">{{ site_host }}</a>,
-                behind an application you started.
+                <strong style="color:#262626;">Equal Housing Opportunity.</strong>
+                We welcome all applicants and comply with all fair housing laws.
               </p>
             </td>
           </tr>
