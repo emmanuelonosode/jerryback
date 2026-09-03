@@ -444,11 +444,33 @@ class Command(BaseCommand):
 
             image_urls = _image_urls(p.get("images"))
             if len(image_urls) < MIN_IMAGES:
-                # Not imported at all - see MIN_IMAGES. An existing record for
-                # this home is left out of `seen_ids`, so the retirement pass
-                # takes it off the market the same way it handles any home that
-                # has left the feed.
                 thin += 1
+                """
+                A THIN FEED ROW NEVER TAKES DOWN AN ESTABLISHED LISTING.
+
+                A new home without photographs is not worth listing, so it is
+                simply not imported - it never gets a URL and nothing is lost.
+
+                A home ALREADY on the site is a different matter. Its URL is in
+                the sitemap and possibly in Google's index, and one scrape
+                returning no photographs is far more likely to be a bad scrape
+                than a landlord deleting every picture. Skipping it outright
+                would leave it out of `seen_ids`, the retirement pass would take
+                it off the market, and a week later its URL would 404 - a live,
+                indexed page destroyed by a transient upstream glitch.
+
+                So an existing record is marked seen and otherwise left exactly
+                as it is: same slug, same photographs, same page. If the home
+                genuinely leaves the feed, the ordinary retirement path handles
+                it; if the photographs come back, the next run updates it
+                normally.
+                """
+                existing = (
+                    Property.objects.filter(slug=slug).values_list("pk", flat=True).first()
+                    or by_place.get(_natural_key(clean_text(p.get("address")), p.get("zip_code") or ""))
+                )
+                if existing:
+                    seen_ids.add(existing)
                 continue
 
             defaults = self._defaults_for(p, agent.id)

@@ -29,10 +29,10 @@ DELETE_CEILING = 0.20
 
 
 class Command(BaseCommand):
-    help = f"Delete properties with fewer than {MIN_IMAGES} photographs."
+    help = f"Withdraw properties with fewer than {MIN_IMAGES} photographs."
 
     def add_arguments(self, parser):
-        parser.add_argument("--dry-run", action="store_true", help="Report without deleting.")
+        parser.add_argument("--dry-run", action="store_true", help="Report without changing anything.")
         parser.add_argument(
             "--force",
             action="store_true",
@@ -76,8 +76,35 @@ class Command(BaseCommand):
             return
 
         if dry:
-            self.stdout.write(self.style.WARNING("Dry run - nothing deleted."))
+            self.stdout.write(self.style.WARNING("Dry run - nothing changed."))
             return
 
-        deleted, details = stale.delete()
-        self.stdout.write(self.style.SUCCESS(f"Deleted {deleted} records: {details}"))
+        '''
+        OFF THE SITE IMMEDIATELY; DELETED ONLY IF IT WAS NEVER LIVE.
+
+        A listing without photographs should stop being offered the moment we
+        notice, and unpublishing does that - it leaves `public()`, leaves the
+        sitemap, and stops being served.
+
+        Deleting the row as well is a different act. A row that has been live
+        has a URL that may be in Google's index and in somebody's messages, and
+        destroying the record is how a catalogue ends up scattering URLs across
+        Search Console. Keeping it means that if the photographs come back the
+        same record is republished at the same address, rather than a new row
+        arriving and the old one having simply vanished.
+
+        So: published records are withdrawn, and only records that were never
+        published - imports that never should have happened - are removed.
+        '''
+        published = stale.filter(is_published=True)
+        withdrawn = published.update(is_published=False, status="off-market")
+
+        never_live = Property.objects.annotate(image_count=Count("images")).filter(
+            image_count__lt=MIN_IMAGES, is_published=False, status="off-market"
+        ).exclude(pk__in=published.values("pk"))
+        deleted, details = never_live.delete()
+
+        self.stdout.write(self.style.SUCCESS(
+            f"Withdrawn {withdrawn} listings (row and URL kept), "
+            f"deleted {deleted} that were never published: {details}"
+        ))
