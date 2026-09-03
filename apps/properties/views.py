@@ -622,3 +622,128 @@ def inventory_stats(request):
         "min_bedrooms": queryset.order_by("bedrooms").values_list("bedrooms", flat=True).first(),
         "max_bedrooms": queryset.order_by("-bedrooms").values_list("bedrooms", flat=True).first(),
     })
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def city_stats(request):
+    """
+    Everything a city hub page needs to say something TRUE about a market.
+
+    WHY THIS EXISTS. The city hubs shipped with a visible "TO CONFIRM" block
+    where the local content should be - published, indexed, and telling every
+    visitor that we have nothing to say about the market they searched for.
+    The intent behind that placeholder was right (a templated paragraph with
+    the city name substituted is not local content) but the answer was wrong:
+    the local content was already in the database, unaggregated.
+
+    So the page is written from THE INVENTORY ITSELF. What a 3-bed actually
+    rents for in Concord, which neighbourhoods and ZIPs we hold homes in, how
+    big they are, how old they are, how many take pets. Every number is a
+    COUNT or a percentile over live rows, so it is specific to the city, true
+    on the day it is read, and re-derived on its own as inventory turns. There
+    is no copy to maintain and nothing to go stale.
+
+    ONE ROUND TRIP OF AGGREGATES, NOT A CATALOGUE. The alternative - fetching
+    the city's homes and reducing them in JavaScript - is what OOM-killed the
+    web process 73 times when the hubs called `allListings()`. Charlotte is
+    155 homes with their image rows; these are five small GROUP BYs over
+    indexed columns and the response is a couple of KB whatever the city.
+
+    Rentable inventory only. A median that includes homes nobody can rent
+    describes a market that does not exist.
+    """
+    city = (request.query_params.get("city") or "").strip()
+    state = (request.query_params.get("state") or "").strip().upper()
+    if not city or not state:
+        return Response(
+            {"detail": "city and state are required."},
+            status=http_status.HTTP_400_BAD_REQUEST,
+        )
+
+    queryset = (
+        Property.objects.rentable()
+        .filter(city__iexact=city, state__iexact=state)
+        .with_total_monthly()
+    )
+
+    # One pass over the columns the whole response is derived from. `values`
+    # rather than model instances: nothing here needs a Property object, and
+    # instantiating 155 of them to read six fields is pure waste.
+    rows = list(
+        queryset.values(
+            "total_monthly_cents", "bedrooms", "bathrooms", "sqft", "year_built",
+            "neighborhood", "zip_code", "type", "pets_allowed", "has_pool",
+            "garage", "status", "available_from",
+        )
+    )
+    if not rows:
+        return Response({"city": city, "state": state, "homes": 0})
+
+    def percentile(values, fraction):
+        """Nearest-rank, on an already-sorted list. Empty in, None out."""
+        if not values:
+            return None
+        index = min(len(values) - 1, int(len(values) * fraction))
+        return values[index]
+
+    def spread(values):
+        ordered = sorted(v for v in values if v)
+        if not ordered:
+            return None
+        return {
+            "min": ordered[0],
+            "median": percentile(ordered, 0.5),
+            "max": ordered[-1],
+        }
+
+    def tally(key, limit=8):
+        """Most common values of one field, biggest first, blanks dropped."""
+        counts = {}
+        for row in rows:
+            value = (row.get(key) or "").strip()
+            if value:
+                counts[value] = counts.get(value, 0) + 1
+        ranked = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+        return [{"name": name, "homes": n} for name, n in ranked[:limit]]
+
+    # Rent by size is the single most useful thing this endpoint returns: it is
+    # what somebody typing "3 bedroom houses for rent in concord nc" is asking,
+    # and no competitor page answers it with the actual local number.
+    by_bedrooms = []
+    for beds in sorted({row["bedrooms"] for row in rows}):
+        group = [row for row in rows if row["bedrooms"] == beds]
+        totals = sorted(row["total_monthly_cents"] for row in group)
+        sqfts = sorted(row["sqft"] for row in group if row["sqft"])
+        by_bedrooms.append({
+            "bedrooms": beds,
+            "homes": len(group),
+            "min_cents": totals[0],
+            "median_cents": percentile(totals, 0.5),
+            "max_cents": totals[-1],
+            "median_sqft": percentile(sqfts, 0.5),
+        })
+
+    available_now = sum(1 for row in rows if row["status"] == "available")
+    upcoming = sorted(
+        row["available_from"] for row in rows if row["available_from"] is not None
+    )
+
+    return Response({
+        "city": city,
+        "state": state,
+        "homes": len(rows),
+        "price": spread([row["total_monthly_cents"] for row in rows]),
+        "by_bedrooms": by_bedrooms,
+        "sqft": spread([row["sqft"] for row in rows]),
+        "year_built": spread([row["year_built"] for row in rows]),
+        "neighborhoods": tally("neighborhood"),
+        "zips": tally("zip_code", limit=12),
+        "home_types": tally("type", limit=5),
+        "pets_allowed": sum(1 for row in rows if row["pets_allowed"]),
+        "with_pool": sum(1 for row in rows if row["has_pool"]),
+        "with_garage": sum(1 for row in rows if (row["garage"] or 0) > 0),
+        "available_now": available_now,
+        "coming_soon": len(rows) - available_now,
+        "soonest_available": upcoming[0].isoformat() if upcoming else None,
+    })

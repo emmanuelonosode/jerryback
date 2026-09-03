@@ -13,6 +13,8 @@ urlpatterns = [
     path("", views.inventory, name="inventory"),
     path("stats/", views.inventory_stats, name="inventory-stats"),
     path("cities/", views.inventory_cities, name="inventory-cities"),
+    # One market's aggregates, so a city hub can describe it truthfully.
+    path("city-stats/", views.city_stats, name="city-stats"),
     # Slugs and timestamps only, for the frontend sitemap.
     path("sitemap/", views.inventory_sitemap, name="inventory-sitemap"),
     # Every matching home as a coordinate, for the search map. Declared before
