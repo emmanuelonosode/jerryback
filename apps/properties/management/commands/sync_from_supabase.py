@@ -72,6 +72,25 @@ what makes the prune converge to nothing.
 """
 MIN_IMAGES = 2
 
+'''
+Fields that move on their own and must not decide whether to write.
+
+`raw_data` is the scraper's entire payload, kept for re-ingest and for staff to
+audit against. The upstream scrape runs daily, so something inside that blob
+differs almost every night - ordering, a timestamp, a transient field - while
+the home it describes has not changed at all.
+
+Comparing it made 3,923 of 5,140 records look changed on a night when 29 of a
+45-record sample differed in NOTHING ELSE. That is the whole write storm this
+rewrite exists to prevent, reintroduced by one field: every `updated_at`
+bumped, and `lastmod` in the sitemap telling Google the entire catalogue
+changed again.
+
+It is still WRITTEN - it just does not get a vote. When a real field moves, the
+record is saved and the fresh payload goes with it.
+'''
+VOLATILE_FIELDS = {"raw_data"}
+
 # Feed fee rows that merely restate the rent. Counting them would double the
 # advertised total; the model has the same guard for the same reason.
 RENT_RESTATEMENTS = {"base rent", "base monthly rent", "rent", "monthly rent"}
@@ -474,6 +493,7 @@ class Command(BaseCommand):
                         field_changed = any(
                             getattr(prop, field, None) != value
                             for field, value in defaults.items()
+                            if field not in VOLATILE_FIELDS
                         )
                         if field_changed and not dry:
                             for field, value in defaults.items():

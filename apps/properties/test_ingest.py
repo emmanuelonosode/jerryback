@@ -143,3 +143,29 @@ class HomeIdentityTests(SimpleTestCase):
         # The ceiling has to sit above that and well below "the feed broke".
         self.assertGreater(RETIRE_CEILING, 0.05)
         self.assertLess(RETIRE_CEILING, 0.5)
+
+
+class ChangeDetectionTests(SimpleTestCase):
+    """
+    What the sync is allowed to treat as a change.
+
+    Every field in this set has, at some point, made all ~5,000 records look
+    changed on a night when almost nothing moved - bumping every `updated_at`
+    and telling Google via `lastmod` that the whole catalogue had changed.
+    """
+
+    def test_the_scraper_payload_does_not_decide_whether_to_write(self):
+        from apps.properties.management.commands.sync_from_supabase import VOLATILE_FIELDS
+
+        # `raw_data` is the upstream scrape verbatim. It is re-scraped daily,
+        # so something inside it differs almost every night while the home it
+        # describes has not changed at all.
+        self.assertIn("raw_data", VOLATILE_FIELDS)
+
+    def test_fields_a_renter_can_see_still_count(self):
+        from apps.properties.management.commands.sync_from_supabase import VOLATILE_FIELDS
+
+        # The guard must stay narrow. Anything here moving is a real change
+        # and has to reach the site.
+        for field in ("price_cents", "status", "available_from", "description", "address"):
+            self.assertNotIn(field, VOLATILE_FIELDS, field)
