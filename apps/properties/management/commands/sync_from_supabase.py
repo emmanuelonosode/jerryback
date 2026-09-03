@@ -56,6 +56,22 @@ PAGE = 100
 # rather than as turnover. See the circuit breaker in `handle`.
 RETIRE_CEILING = 0.20
 
+"""
+A home needs more than one photograph to be worth listing.
+
+The feed ships some with none and some with one - about 3% of a 300-row
+sample. A single exterior shot tells a renter almost nothing, and a listing
+with no photograph reads as a scam listing in this category, which is the
+opposite of what this site is for.
+
+THE THRESHOLD IS ENFORCED HERE, NOT ONLY BY THE NIGHTLY PRUNE. Deleting them
+downstream while the sync kept importing them would delete and recreate the
+same few hundred records every night for ever - churn that shows up in Google
+as URLs appearing and disappearing. Not importing them in the first place is
+what makes the prune converge to nothing.
+"""
+MIN_IMAGES = 2
+
 # Feed fee rows that merely restate the rent. Counting them would double the
 # advertised total; the model has the same guard for the same reason.
 RENT_RESTATEMENTS = {"base rent", "base monthly rent", "rent", "monthly rent"}
@@ -359,7 +375,7 @@ class Command(BaseCommand):
         rows = self._fetch_all()
         self.stdout.write(f"  {len(rows)} available properties in the feed")
 
-        created = updated = unchanged = failed = 0
+        created = updated = unchanged = failed = thin = 0
         seen_ids: set = set()
 
         # One pass over what we already hold, so the loop below can ask "is this
@@ -406,6 +422,15 @@ class Command(BaseCommand):
             if not slug:
                 continue
 
+
+            image_urls = _image_urls(p.get("images"))
+            if len(image_urls) < MIN_IMAGES:
+                # Not imported at all - see MIN_IMAGES. An existing record for
+                # this home is left out of `seen_ids`, so the retirement pass
+                # takes it off the market the same way it handles any home that
+                # has left the feed.
+                thin += 1
+                continue
 
             defaults = self._defaults_for(p, agent.id)
             try:
@@ -457,7 +482,7 @@ class Command(BaseCommand):
 
                     images = [
                         {"url": u, "source_url": u, "is_primary": i == 0, "sort_order": i}
-                        for i, u in enumerate(_image_urls(p.get("images")))
+                        for i, u in enumerate(image_urls)
                     ]
                     amenities = [
                         {"name": n, "slug": slugify(n)[:120]}
@@ -535,6 +560,6 @@ class Command(BaseCommand):
         verb = "Would sync" if dry else "Synced"
         self.stdout.write(self.style.SUCCESS(
             f"{verb}: {created} new, {updated} changed, {unchanged} unchanged, "
-            f"{retired} retired, {failed} failed "
+            f"{retired} retired, {thin} skipped (under {MIN_IMAGES} photos), {failed} failed "
             f"({(timezone.now() - started).total_seconds():.0f}s)"
         ))
