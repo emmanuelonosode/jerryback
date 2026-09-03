@@ -672,7 +672,7 @@ def city_stats(request):
     # instantiating 155 of them to read six fields is pure waste.
     rows = list(
         queryset.values(
-            "total_monthly_cents", "bedrooms", "bathrooms", "sqft", "year_built",
+            "total_monthly_cents", "bedrooms", "sqft", "year_built",
             "neighborhood", "zip_code", "type", "pets_allowed", "has_pool",
             "garage", "status", "available_from",
         )
