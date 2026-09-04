@@ -249,3 +249,82 @@ class ConcurrentSendTests(TestCase):
 
         message.refresh_from_db()
         self.assertEqual(message.status, EmailStatus.SENT)
+
+
+# ===========================================================================
+# Staff alerts
+#
+# The bug these guard against was not a crash. Nine leads, five tour requests
+# and three applications accumulated with nobody notified, because no code
+# sent staff mail - the failure mode of a notification system is silence, and
+# silence is exactly what a test suite is for.
+# ===========================================================================
+
+from unittest import mock  # noqa: E402
+
+from django.test import TestCase, override_settings  # noqa: E402
+
+from .alerts import describe, notify_staff, staff_recipients  # noqa: E402
+from .models import OutboundEmail  # noqa: E402
+
+
+class StaffRecipientsTests(TestCase):
+    @override_settings(STAFF_ALERT_EMAILS="a@example.com, b@example.com")
+    def test_reads_the_configured_list(self):
+        self.assertEqual(staff_recipients(), ["a@example.com", "b@example.com"])
+
+    @override_settings(STAFF_ALERT_EMAILS="a@example.com;b@example.com|c@example.com")
+    def test_accepts_whichever_separator_someone_typed(self):
+        self.assertEqual(
+            staff_recipients(), ["a@example.com", "b@example.com", "c@example.com"]
+        )
+
+    @override_settings(
+        STAFF_ALERT_EMAILS="",
+        DEFAULT_FROM_EMAIL="Skelton Realty Group <housing@skeltonrealtygroup.com>",
+    )
+    def test_falls_back_to_the_sites_own_address_and_unwraps_it(self):
+        # Unconfigured must not mean unnotified - that is the original bug.
+        self.assertEqual(staff_recipients(), ["housing@skeltonrealtygroup.com"])
+
+    @override_settings(STAFF_ALERT_EMAILS="not-an-address, ok@example.com")
+    def test_drops_entries_that_are_not_addresses(self):
+        self.assertEqual(staff_recipients(), ["ok@example.com"])
+
+
+@override_settings(STAFF_ALERT_EMAILS="team@example.com")
+class NotifyStaffTests(TestCase):
+    def test_queues_one_message_per_recipient(self):
+        with override_settings(STAFF_ALERT_EMAILS="a@example.com,b@example.com"):
+            self.assertTrue(notify_staff(subject="Hi", body="Body", kind="callback"))
+        self.assertEqual(OutboundEmail.objects.count(), 2)
+        self.assertEqual(
+            sorted(OutboundEmail.objects.values_list("to_email", flat=True)),
+            ["a@example.com", "b@example.com"],
+        )
+
+    def test_a_broken_mail_path_never_raises(self):
+        """
+        THE RULE THAT MATTERS MOST. A visitor's submission has already
+        succeeded by the time this runs; losing the lead because we could not
+        email ourselves about it would be worse than the bug being fixed.
+        """
+        with mock.patch(
+            "apps.integrations.models.queue_email", side_effect=RuntimeError("smtp down")
+        ):
+            self.assertFalse(notify_staff(subject="Hi", body="Body", kind="callback"))
+
+    @override_settings(STAFF_ALERT_EMAILS="")
+    @override_settings(DEFAULT_FROM_EMAIL="")
+    def test_no_recipients_is_reported_not_raised(self):
+        self.assertFalse(notify_staff(subject="Hi", body="Body"))
+        self.assertEqual(OutboundEmail.objects.count(), 0)
+
+
+class DescribeTests(TestCase):
+    def test_omits_the_lines_with_nothing_in_them(self):
+        text = describe([("Name", "Ada"), ("Phone", ""), ("Email", None), ("Home", "12 St")])
+        self.assertEqual(text, "Name: Ada\nHome: 12 St")
+
+    def test_stringifies_whatever_it_is_given(self):
+        self.assertEqual(describe([("Count", 3)]), "Count: 3")

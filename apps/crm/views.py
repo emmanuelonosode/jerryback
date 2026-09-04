@@ -49,6 +49,7 @@ from rest_framework import status as _http  # noqa: E402
 from rest_framework.permissions import AllowAny  # noqa: E402
 
 from .models import ApplicationStatus as _AppStatus  # noqa: E402
+from apps.integrations.alerts import admin_link, describe, notify_staff  # noqa: E402
 from apps.billing.models import PaymentMethodConfig  # noqa: E402
 from apps.billing.serializers import PaymentMethodConfigSerializer  # noqa: E402
 
@@ -198,6 +199,30 @@ def create_draft(request):
         application_fee_cents=0,
         draft_data={"listingSlug": listing_slug or None},
     )
+
+    # SOMEBODY HAS STARTED AN APPLICATION. This is the earliest and warmest
+    # signal the site produces - further down the funnel than a callback and
+    # with a specific house attached - and until now it was silent. Two of the
+    # three applications on the system are drafts that were started and never
+    # finished, and nobody knew to ring either of them.
+    #
+    # There is no contact detail yet: the draft is created when the form opens,
+    # before a single field is filled. What it gives you is a house and a
+    # clock, and `submit_draft` follows with the person's details.
+    notify_staff(
+        subject=f"Application started{f' - {home}' if home else ''}",
+        body=describe([
+            ("Home", home or "not chosen yet"),
+            ("Started", _timezone.localtime().strftime("%a %d %b, %H:%M")),
+            ("Open in admin", admin_link(f"crm/rentalapplication/{application.id}/change")),
+        ]) + (
+            "\n\nThis fires when someone opens the application form, so their "
+            "details are not filled in yet. If no 'Application submitted' "
+            "follows this within an hour or so, somebody got stuck part way "
+            "through and is worth chasing.\n"
+        ),
+        kind="application-started",
+    )
     return Response(_draft_payload(application), status=_http.HTTP_201_CREATED)
 
 
@@ -247,6 +272,28 @@ def submit_draft(request, draft_id):
     application.save(update_fields=["submitted_at", "status", "draft_data", "updated_at"])
 
     _record_declared_payment(application, now)
+
+    # The end of the funnel. Somebody has filled in an application and, on a
+    # manual-payment site, is waiting on a human before anything else happens -
+    # so this is the one alert that must never sit in a queue.
+    draft = application.draft_data or {}
+    notify_staff(
+        subject=(
+            f"APPLICATION SUBMITTED: {application.first_name} {application.last_name}".strip()
+            + (f" - {application.property}" if application.property_id else "")
+        ),
+        body=describe([
+            ("Name", f"{application.first_name} {application.last_name}".strip()),
+            ("Email", application.email),
+            ("Phone", application.phone),
+            ("Home", application.property if application.property_id else "not specified"),
+            ("Move-in", draft.get("moveInDate")),
+            ("Submitted", _timezone.localtime(now).strftime("%a %d %b, %H:%M")),
+            ("Payment declared", "yes" if draft.get("paymentReference") else "not yet"),
+            ("Open in admin", admin_link(f"crm/rentalapplication/{application.id}/change")),
+        ]) + "\n\nThey are waiting on a decision. The site promises one within 24 hours.\n",
+        kind="application-submitted",
+    )
     return Response(_draft_payload(application))
 
 
@@ -387,6 +434,19 @@ def contact_inquiry(request):
         activity_type="INQUIRY",
         note=f"Contact message: {message}",
     )
+
+    notify_staff(
+        subject=f"Message from {full_name}" + (f": {subject}" if subject else ""),
+        body=describe([
+            ("Name", full_name),
+            ("Email", email),
+            ("Phone", phone),
+            ("Subject", subject),
+            ("Received", _timezone.localtime().strftime("%a %d %b, %H:%M")),
+            ("Open in admin", admin_link(f"crm/lead/{lead.id}/change")),
+        ]) + f"\n\nThey wrote:\n\n{message}\n",
+        kind="contact",
+    )
     return Response({"status": "received", "lead_id": str(lead.id)})
 
 
@@ -449,6 +509,21 @@ def callback_request(request):
         lead.save()
 
     LeadActivity.objects.create(lead=lead, activity_type="INQUIRY", note=note)
+
+    # THE WHOLE POINT OF THE POPUP. Somebody has handed over a phone number and
+    # expects to be rung; a row in a table nobody is watching is not a lead.
+    notify_staff(
+        subject=f"Call back: {lead.full_name or 'someone'} - {phone}",
+        body=describe([
+            ("Name", lead.full_name),
+            ("Phone", phone),
+            ("Wants to move", move_in),
+            ("Asked from", page or "the site"),
+            ("Received", _timezone.localtime().strftime("%a %d %b, %H:%M")),
+            ("Open in admin", admin_link(f"crm/lead/{lead.id}/change")),
+        ]) + "\n\nThey asked to be called back, so the clock is running.",
+        kind="callback",
+    )
     return Response({"status": "received", "lead_id": str(lead.id)})
 
 

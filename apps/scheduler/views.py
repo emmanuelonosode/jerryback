@@ -19,10 +19,14 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 
+from django.utils import timezone
+
 from apps.crm.models import Lead, LeadSource
+from apps.integrations.alerts import admin_link, describe, notify_staff
+from apps.integrations.models import queue_email
 from apps.properties.models import Property
 
-from .models import TourRequest
+from .models import TourRequest, TourStatus
 
 
 class TourThrottle(ScopedRateThrottle):
@@ -59,6 +63,21 @@ def request_tour(request):
     tour = TourRequest.objects.create(
         lead=lead,
         property=home,
+        # PENDING_REVIEW, NOT AWAITING_ID.
+        #
+        # The model defaults to AWAITING_ID, and there is no ID upload endpoint
+        # anywhere in this app - `urls.py` exposes exactly one route, this one.
+        # So every public tour request landed in a state the product gives
+        # nobody a way to leave: all five on the system sat there, the oldest
+        # four days old, looking to staff like the visitor had failed to do
+        # something when the visitor had never been asked for anything.
+        #
+        # What actually happens to a tour request is that a person reads it and
+        # confirms a time, which is what the form promises and what this status
+        # means. The id_front_url / id_back_url fields stay on the model for
+        # staff who check ID at the door, which is how a self-guided viewing
+        # works anyway.
+        status=TourStatus.PENDING_REVIEW,
         full_name=name[:200],
         email=email,
         phone=(data.get("phone") or "")[:20],
@@ -66,6 +85,54 @@ def request_tour(request):
         preferred_time=(data.get("preferredTime") or "")[:20],
         tour_type=(data.get("kind") or "self-tour")[:20],
         notes=(data.get("note") or "")[:2000],
+    )
+
+    when = tour.preferred_date.strftime("%a %d %b")
+    if tour.preferred_time:
+        when += f", {tour.preferred_time}"
+    home_label = str(home) if home else "a home (not specified)"
+
+    # NOBODY WAS TOLD, ON EITHER SIDE.
+    #
+    # Five tour requests were sitting in the database, the oldest from four
+    # days earlier, every one of them at AWAITING_ID. Staff got no alert. The
+    # person who asked got no email. The form said "a person will confirm
+    # within 24 hours" and then nothing happened to anybody, which is exactly
+    # how a real letting business ends up looking like a fake listing.
+    notify_staff(
+        subject=f"Tour request: {name} - {home_label}",
+        body=describe([
+            ("Name", name),
+            ("Email", email),
+            ("Phone", tour.phone),
+            ("Home", home_label),
+            ("Wants to visit", when),
+            ("Type", tour.tour_type),
+            ("Notes", tour.notes),
+            ("Received", timezone.localtime().strftime("%a %d %b, %H:%M")),
+            ("Open in admin", admin_link(f"scheduler/tourrequest/{tour.id}/change")),
+        ]) + "\n\nConfirm the time with them - the site promises that within 24 hours.\n",
+        kind="tour",
+    )
+
+    # And the person who asked. A request that vanishes into silence is the
+    # single most common reason someone stops trusting a rental site, and it
+    # costs one email to not do that.
+    queue_email(
+        send_now=True,
+        to_email=email,
+        subject=f"We have your tour request for {home_label}",
+        body_text=(
+            f"Hi {name.split(' ')[0] if name else 'there'},\n\n"
+            f"Thanks for asking to see {home_label}. Here is what you told us:\n\n"
+            f"  When you would like to visit: {when}\n"
+            f"  Type of visit: {tour.tour_type}\n\n"
+            "Someone will confirm the time with you within 24 hours. If your plans "
+            "change before then, just reply to this email and we will move it - "
+            "there is nothing to cancel and nothing to pay.\n\n"
+            "Any questions at all, just reply to this email - a person reads it.\n"
+        ),
+        template="tour-received",
     )
 
     # `public_id`, never the primary key: this goes back to the browser, and an

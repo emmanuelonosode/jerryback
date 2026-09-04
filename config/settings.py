@@ -274,6 +274,25 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 # noise floor of bots probing /admin/. Not security on its own.
 ADMIN_PATH = env("ADMIN_PATH", default="")
 
+
+# ---------------------------------------------------------------------------
+# Staff alerts
+#
+# WHO HEARS ABOUT A LEAD. Comma-separated. Nine leads, five tour requests and
+# three applications accumulated in the database with nobody notified about any
+# of them, because no code sent staff mail and ADMINS was empty - the business
+# concluded the lead capture was broken when it had been working the whole
+# time. This is the list that fixes that, and it is an environment variable
+# because who should be woken up by a lead changes without a deploy.
+#
+# Empty falls back to DEFAULT_FROM_EMAIL, which is always deliverable because
+# it is the same mailbox the site already sends from.
+# ---------------------------------------------------------------------------
+STAFF_ALERT_EMAILS = env("STAFF_ALERT_EMAILS", default="")
+
+# Where the admin lives, so an alert can deep-link the record it is about.
+PUBLIC_ADMIN_URL = env("PUBLIC_ADMIN_URL", default="")
+
 # Hosts whose requests are our own web server rather than a member of the
 # public. Loopback is always trusted; this names anything else - on a
 # single-box deployment that is the box's own public address, because the
