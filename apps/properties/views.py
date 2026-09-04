@@ -655,17 +655,20 @@ def city_stats(request):
     """
     city = (request.query_params.get("city") or "").strip()
     state = (request.query_params.get("state") or "").strip().upper()
-    if not city or not state:
+    if not state:
         return Response(
-            {"detail": "city and state are required."},
+            {"detail": "state is required."},
             status=http_status.HTTP_400_BAD_REQUEST,
         )
 
-    queryset = (
-        Property.objects.rentable()
-        .filter(city__iexact=city, state__iexact=state)
-        .with_total_monthly()
-    )
+    # `city` is OPTIONAL: without it this aggregates the whole state, which is
+    # what the state hub needs and is the same computation over a wider set.
+    # A second endpoint for it would be the same code with one filter removed
+    # and a second place for the two to disagree about what a median is.
+    queryset = Property.objects.rentable().filter(state__iexact=state)
+    if city:
+        queryset = queryset.filter(city__iexact=city)
+    queryset = queryset.with_total_monthly()
 
     # One pass over the columns the whole response is derived from. `values`
     # rather than model instances: nothing here needs a Property object, and
@@ -674,7 +677,7 @@ def city_stats(request):
         queryset.values(
             "total_monthly_cents", "bedrooms", "sqft", "year_built",
             "neighborhood", "zip_code", "type", "pets_allowed", "has_pool",
-            "garage", "status", "available_from",
+            "garage", "status", "available_from", "city",
         )
     )
     if not rows:
@@ -733,6 +736,8 @@ def city_stats(request):
         "city": city,
         "state": state,
         "homes": len(rows),
+        # Only meaningful state-wide; a city hub already knows its own name.
+        "cities": tally("city", limit=12) if not city else [],
         "price": spread([row["total_monthly_cents"] for row in rows]),
         "by_bedrooms": by_bedrooms,
         "sqft": spread([row["sqft"] for row in rows]),
