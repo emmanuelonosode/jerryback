@@ -28,6 +28,13 @@ from apps.properties.models import Property
 
 from .models import TourRequest, TourStatus
 
+# The response time the public form promises. Kept here so the confirmation
+# email and the staff alert cannot quote a different number from the page the
+# person just filled in - the first draft of this said 24 hours while the form
+# said 4, which is the kind of mismatch that turns a kept promise into a
+# broken one.
+RESPONSE_HOURS = 4
+
 
 class TourThrottle(ScopedRateThrottle):
     scope = "tour"
@@ -111,7 +118,10 @@ def request_tour(request):
             ("Notes", tour.notes),
             ("Received", timezone.localtime().strftime("%a %d %b, %H:%M")),
             ("Open in admin", admin_link(f"scheduler/tourrequest/{tour.id}/change")),
-        ]) + "\n\nConfirm the time with them - the site promises that within 24 hours.\n",
+        ]) + (
+            "\n\nConfirm a time with them. The form they used promises that within "
+            f"{RESPONSE_HOURS} business hours, so that is the clock you are on.\n"
+        ),
         kind="tour",
     )
 
@@ -127,7 +137,8 @@ def request_tour(request):
             f"Thanks for asking to see {home_label}. Here is what you told us:\n\n"
             f"  When you would like to visit: {when}\n"
             f"  Type of visit: {tour.tour_type}\n\n"
-            "Someone will confirm the time with you within 24 hours. If your plans "
+            f"Someone will confirm the time with you within {RESPONSE_HOURS} business "
+            "hours. If your plans "
             "change before then, just reply to this email and we will move it - "
             "there is nothing to cancel and nothing to pay.\n\n"
             "Any questions at all, just reply to this email - a person reads it.\n"
