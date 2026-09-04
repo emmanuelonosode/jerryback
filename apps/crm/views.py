@@ -285,9 +285,9 @@ def submit_draft(request, draft_id):
         body=describe([
             ("Name", f"{application.first_name} {application.last_name}".strip()),
             ("Email", application.email),
-            ("Phone", application.phone),
+            ("Phone", application.cell_phone),
             ("Home", application.property if application.property_id else "not specified"),
-            ("Move-in", draft.get("moveInDate")),
+            ("Move-in", application.move_in_date or draft.get("moveInDate")),
             ("Submitted", _timezone.localtime(now).strftime("%a %d %b, %H:%M")),
             ("Payment declared", "yes" if draft.get("paymentReference") else "not yet"),
             ("Open in admin", admin_link(f"crm/rentalapplication/{application.id}/change")),
