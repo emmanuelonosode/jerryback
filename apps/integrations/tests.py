@@ -295,6 +295,8 @@ class StaffRecipientsTests(TestCase):
 @override_settings(STAFF_ALERT_EMAILS="team@example.com")
 class NotifyStaffTests(TestCase):
     def test_queues_one_message_per_recipient(self):
+        # Queued in the request; delivery happens on a background thread, so
+        # the row existing is what this asserts.
         with override_settings(STAFF_ALERT_EMAILS="a@example.com,b@example.com"):
             self.assertTrue(notify_staff(subject="Hi", body="Body", kind="callback"))
         self.assertEqual(OutboundEmail.objects.count(), 2)
@@ -302,6 +304,17 @@ class NotifyStaffTests(TestCase):
             sorted(OutboundEmail.objects.values_list("to_email", flat=True)),
             ["a@example.com", "b@example.com"],
         )
+
+    def test_delivery_does_not_happen_on_the_request_thread(self):
+        """
+        The regression this guards: sending inline took the tour endpoint to
+        5.9s on production, because every recipient is an SMTP round trip the
+        visitor waits through.
+        """
+        with mock.patch("apps.integrations.alerts.deliver_in_background") as background:
+            notify_staff(subject="Hi", body="Body", kind="callback")
+        self.assertTrue(background.called, "alerts must be delivered off-thread")
+        self.assertEqual(OutboundEmail.objects.count(), 1)
 
     def test_a_broken_mail_path_never_raises(self):
         """

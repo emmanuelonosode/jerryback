@@ -22,7 +22,12 @@ from rest_framework.throttling import ScopedRateThrottle
 from django.utils import timezone
 
 from apps.crm.models import Lead, LeadSource
-from apps.integrations.alerts import admin_link, describe, notify_staff
+from apps.integrations.alerts import (
+    admin_link,
+    deliver_in_background,
+    describe,
+    notify_staff,
+)
 from apps.integrations.models import queue_email
 from apps.properties.models import Property
 
@@ -129,8 +134,11 @@ def request_tour(request):
     # And the person who asked. A request that vanishes into silence is the
     # single most common reason someone stops trusting a rental site, and it
     # costs one email to not do that.
-    queue_email(
-        send_now=True,
+    # Queued, not sent inline: the person is watching a spinner, and their own
+    # confirmation is the one message they are guaranteed to see anyway. It
+    # leaves on the same background thread as the staff alert below.
+    confirmation = queue_email(
+        send_now=False,
         to_email=email,
         subject=f"We have your tour request for {home_label}",
         body_text=(
@@ -146,6 +154,8 @@ def request_tour(request):
         ),
         template="tour-received",
     )
+    if confirmation is not None:
+        deliver_in_background([confirmation])
 
     # `public_id`, never the primary key: this goes back to the browser, and an
     # internal id in a URL invites guessing at other people's.

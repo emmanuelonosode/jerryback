@@ -29,6 +29,7 @@ the value of arriving immediately is the entire point.
 """
 
 import logging
+import threading
 
 from django.conf import settings
 
@@ -82,18 +83,24 @@ def notify_staff(*, subject: str, body: str, kind: str = "") -> bool:
             logger.warning("staff alert not sent (%s): no recipients configured", kind)
             return False
 
-        sent = False
+        queued = []
         for address in recipients:
-            queue_email(
+            message = queue_email(
                 to_email=address,
                 subject=subject,
                 body_text=body,
                 template=f"staff-alert-{kind}" if kind else "staff-alert",
-                # A lead is only worth knowing about while it is warm.
-                send_now=True,
+                # Queued here, delivered off-thread. See the module docstring:
+                # send_now would put four SMTP round trips inside the request
+                # the visitor is waiting on.
+                send_now=False,
             )
-            sent = True
-        return sent
+            if message is not None:
+                queued.append(message)
+
+        if queued:
+            deliver_in_background(queued)
+        return bool(queued)
     except Exception:
         # Deliberately broad. Whatever goes wrong here, the visitor's
         # submission has already succeeded and must not be rolled back.
@@ -115,3 +122,33 @@ def describe(pairs: list[tuple[str, object]]) -> str:
         if text:
             lines.append(f"{label}: {text}")
     return "\n".join(lines)
+
+
+def deliver_in_background(messages) -> None:
+    """
+    Push already-queued mail out without holding up the response.
+
+    A DAEMON THREAD, DELIBERATELY. This is not a job queue and does not pretend
+    to be one: there is no Celery here, and standing one up to send two emails
+    would be a large amount of moving parts for the problem. What makes a bare
+    thread acceptable is that it is PURELY AN ACCELERATION - every message is
+    already a row in the database before this is called, so the worst case when
+    the thread is killed mid-flight is that `send_queued_email` delivers it on
+    the next tick, which is exactly the behaviour the site had before.
+
+    Never raises, for the same reason nothing else here does: the visitor's
+    submission has already succeeded.
+    """
+    def run():
+        try:
+            from .models import deliver_now
+
+            for message in messages:
+                deliver_now(message)
+        except Exception:
+            logger.exception("background delivery failed; the queue will retry")
+
+    try:
+        threading.Thread(target=run, name="staff-alert-mail", daemon=True).start()
+    except Exception:
+        logger.exception("could not start delivery thread; the queue will retry")
