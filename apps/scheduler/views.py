@@ -27,6 +27,7 @@ from apps.integrations.models import queue_email
 from apps.properties.models import Property
 
 from .models import TourRequest, TourStatus
+from .storage import RejectedUpload, store_tour_id
 
 # The response time the public form promises. Kept here so the confirmation
 # email and the staff alert cannot quote a different number from the page the
@@ -149,3 +150,70 @@ def request_tour(request):
     # `public_id`, never the primary key: this goes back to the browser, and an
     # internal id in a URL invites guessing at other people's.
     return Response({"id": str(tour.public_id), "status": tour.status}, status=http.HTTP_201_CREATED)
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+@throttle_classes([TourThrottle])
+def upload_tour_id(request, public_id):
+    """
+    Attach an ID photo to a tour request.
+
+    AUTHORISED BY `public_id`, WHICH IS WHY IT IS UNGUESSABLE. There is no
+    account at this point - somebody asked to see a house thirty seconds ago -
+    so the capability to attach a document to one specific request is the
+    random id handed back when that request was created, and nothing else.
+    The primary key is never exposed for exactly this reason.
+
+    OPTIONAL, AND IT MUST STAY OPTIONAL. An ID speeds up a self-guided
+    viewing, and requiring one before we will even talk about a time is how
+    the previous version of this flow ended up with five requests stranded in
+    an AWAITING_ID state that nothing could leave. The tour is already
+    requested by the time this is called; this only ever adds to it.
+
+    ONLY BEFORE REVIEW. Once staff have decided, the documents are on their
+    way to being purged and re-uploading into that is pointless.
+    """
+    tour = TourRequest.objects.filter(public_id=public_id).first()
+    if tour is None:
+        return Response({"detail": "No such tour request."}, status=http.HTTP_404_NOT_FOUND)
+    if tour.id_purged_at is not None:
+        return Response(
+            {"detail": "This request has already been reviewed."},
+            status=http.HTTP_409_CONFLICT,
+        )
+
+    saved = []
+    for side in ("front", "back"):
+        upload = request.FILES.get(f"id{side.capitalize()}") or request.FILES.get(side)
+        if upload is None or upload.size == 0:
+            continue
+        try:
+            filename = store_tour_id(upload, tour_public_id=tour.public_id, side=side)
+        except RejectedUpload as refusal:
+            # Said out loud, with the reason. A silent refusal on a document
+            # upload leaves somebody believing they have sent us something.
+            return Response({"detail": str(refusal)}, status=http.HTTP_400_BAD_REQUEST)
+        setattr(tour, f"id_{side}_url", filename)
+        saved.append(side)
+
+    if not saved:
+        return Response(
+            {"detail": "Attach a photo of your ID."},
+            status=http.HTTP_400_BAD_REQUEST,
+        )
+
+    tour.save(update_fields=[f"id_{side}_url" for side in saved])
+
+    notify_staff(
+        subject=f"ID received for {tour.full_name}'s tour",
+        body=describe([
+            ("Name", tour.full_name),
+            ("Email", tour.email),
+            ("Home", str(tour.property) if tour.property_id else "not specified"),
+            ("Sides received", ", ".join(saved)),
+            ("Open in admin", admin_link(f"scheduler/tourrequest/{tour.id}/change")),
+        ]) + "\n\nHeld only until the viewing is reviewed, then deleted automatically.\n",
+        kind="tour-id",
+    )
+    return Response({"received": saved}, status=http.HTTP_200_OK)

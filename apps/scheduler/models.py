@@ -73,6 +73,27 @@ class TourRequest(models.Model):
         ).exclude(id_front_url="", id_back_url="")
 
     def purge_ids(self) -> None:
+        """
+        Delete the ID images and record that we did.
+
+        THE FILES ARE REMOVED, NOT JUST THE REFERENCES. This used to blank the
+        two URL columns and stop there, which reads as a purge in the admin
+        and in the database while every uploaded government ID stays on disk
+        for ever, now unreferenced and so invisible to anyone reviewing what
+        we hold. For this class of document that is the worst of both: the
+        retention policy looks satisfied and nothing has actually been
+        deleted.
+
+        Unlinking is best-effort. A file that has already gone is the outcome
+        we wanted, and a file we cannot remove must not stop the record being
+        marked - otherwise one stuck file blocks the whole purge run.
+        """
+        from .storage import delete_tour_id
+
+        for stored in (self.id_front_url, self.id_back_url):
+            if stored:
+                delete_tour_id(stored)
+
         self.id_front_url = ""
         self.id_back_url = ""
         self.id_purged_at = timezone.now()

@@ -256,6 +256,14 @@ STORAGES = {
 
 MEDIA_URL = env("MEDIA_URL", default="/media/")
 MEDIA_ROOT = env("MEDIA_ROOT", default=str(BASE_DIR / "media"))
+
+# Uploads the web server must NOT serve.
+#
+# MEDIA_ROOT is served at MEDIA_URL, so anything written there is reachable by
+# URL. Tour ID documents - a photo of somebody's driving licence - go here
+# instead, in a directory nginx has no location block for, so reaching one
+# takes shell access to the box rather than a guessed filename.
+PRIVATE_UPLOAD_ROOT = env("PRIVATE_UPLOAD_ROOT", default=str(BASE_DIR / "private-uploads"))
 # Absolute origin for media served to OTHER hosts — the public site runs on a
 # different domain to this admin, so a relative /media/ path 404s there. Empty
 # means "derive it from the request", which is what local development wants.
