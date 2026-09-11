@@ -46,6 +46,10 @@ class PropertyAdmin(UnfoldModelAdmin):
     readonly_fields = ("slug", "original_price_cents", "created_at", "updated_at", "total_monthly_display", "schools", "raw_fees", "office_info", "floor_plans")
     inlines = [PropertyImageInline, PropertyFeeInline, PropertyAmenityInline]
     actions = ["mark_verified", "publish", "unpublish"]
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).with_total_monthly()
+
     fieldsets = (
         ("Listing", {"fields": ("title", "slug", "description", "type", "status", "is_published")}),
         ("Pricing", {
