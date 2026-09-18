@@ -136,6 +136,24 @@ def submit_proof(request):
         status=PaymentStatus.PENDING_VERIFICATION,
     )
 
+    try:
+        from apps.integrations.alerts import notify_staff, describe, admin_link
+        app = invoice.rental_application
+        name = f"{app.first_name} {app.last_name}".strip() if app else "Applicant"
+        notify_staff(
+            subject=f"PAYMENT PROOF SUBMITTED: {name} - ${data['amount_cents']/100:.2f}",
+            body=describe([
+                ("Applicant", name),
+                ("Amount", f"${data['amount_cents']/100:.2f}"),
+                ("Method", data["payment_method"]),
+                ("Reference", data.get("reference_id", "").strip()),
+                ("Open in admin", admin_link(f"billing/payment/{payment.id}/change")),
+            ]) + "\n\nA payment proof was uploaded and is waiting for verification.\n",
+            kind="payment",
+        )
+    except Exception:
+        pass
+
     return Response(PaymentSerializer(payment).data, status=status.HTTP_201_CREATED)
 
 @api_view(["GET"])

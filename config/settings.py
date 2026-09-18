@@ -453,6 +453,11 @@ if TESTING:
     # Argon2 is correct in production and makes a suite crawl; the hashing
     # behaviour itself is covered by its own tests.
     PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.dummy.DummyCache",
+        }
+    }
 
 LOGGING = {
     "version": 1,

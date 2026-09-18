@@ -15,6 +15,7 @@ from rest_framework import status as http_status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from django.views.decorators.cache import cache_page
 
 from .models import RENTABLE_STATUSES, FavoriteProperty
 from .serializers import FavoriteSerializer
@@ -290,6 +291,7 @@ def _apply_filters(request, queryset):
     return queryset, searched
 
 
+@cache_page(60)
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def inventory(request):
@@ -330,6 +332,7 @@ MAX_PINS = 25_000
 PIN_PRECISION = 5
 
 
+@cache_page(60)
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def inventory_pins(request):
@@ -389,6 +392,7 @@ def inventory_pins(request):
     return response
 
 
+@cache_page(60)
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def inventory_cities(request):
@@ -436,6 +440,7 @@ def inventory_cities(request):
     ])
 
 
+@cache_page(60)
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def inventory_sitemap(request):
@@ -543,6 +548,7 @@ def inventory_map_pins(request):
     return Response(MapPinSerializer(queryset, many=True).data)
 
 
+@cache_page(60)
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def inventory_detail(request, slug):
@@ -621,6 +627,7 @@ def merge_favorites(request):
 
     return Response({"added": added, "total": FavoriteProperty.objects.filter(user=request.user).count()})
 
+@cache_page(60)
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def inventory_stats(request):

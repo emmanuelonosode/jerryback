@@ -11,3 +11,8 @@ media/
 .coverage
 htmlcov/
 .next/
+private-uploads/
+venv/
+test_*.py
+fix_json.py
+._*

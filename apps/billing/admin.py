@@ -78,7 +78,26 @@ class PaymentAdmin(UnfoldModelAdmin):
     @admin.display(description="Proof", boolean=True)
     def has_proof(self, obj):
         return bool(obj.proof_image_url)
-    readonly_fields = ("verified_by", "verified_at", "paid_at", "created_at")
+
+    @admin.display(description="Proof Image")
+    def proof_image_preview(self, obj):
+        if obj.proof_image_url:
+            from django.urls import reverse
+            from pathlib import Path
+            safe_name = Path(obj.proof_image_url).name
+            view_url = reverse("secure-payment-proof-view", kwargs={"filename": safe_name})
+            download_url = f"{view_url}?download=1"
+                
+            return format_html(
+                '<a href="{}" target="_blank" download style="display:inline-block;margin-bottom:10px;text-decoration:underline;color:#0b6b47;">'
+                '<strong>Download Proof ⬇️</strong></a><br/>'
+                '<a href="{}" target="_blank">'
+                '<img src="{}" style="max-width:400px;border-radius:8px;border:1px solid #ddd" /></a>',
+                download_url, view_url, view_url
+            )
+        return "Not uploaded"
+
+    readonly_fields = ("proof_image_preview", "verified_by", "verified_at", "paid_at", "created_at")
     actions = ["verify_selected"]
 
     @admin.display(description="Amount")

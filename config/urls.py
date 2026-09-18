@@ -59,3 +59,20 @@ urlpatterns = [
 urlpatterns = static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT) + urlpatterns + [
     path(ADMIN_PATH, admin.site.urls),
 ]
+
+# --- Monkey-patch for Property Foreign Keys ---
+# Loading all 7000+ properties in a dropdown causes massive timeouts.
+# This forces all ModelAdmins with a Property ForeignKey to use autocomplete_fields.
+from apps.properties.models import Property
+for model, model_admin in admin.site._registry.items():
+    has_prop = False
+    for field in model._meta.get_fields():
+        if field.name == 'property' and field.is_relation and field.related_model == Property:
+            has_prop = True
+            break
+            
+    if has_prop:
+        ac_fields = list(getattr(model_admin, 'autocomplete_fields', []))
+        if 'property' not in ac_fields:
+            ac_fields.append('property')
+            model_admin.autocomplete_fields = ac_fields

@@ -11,7 +11,7 @@ from unfold.admin import ModelAdmin as UnfoldModelAdmin
 from .branding import render_email_html
 from .forms import ComposeEmailForm
 from .message_templates import MESSAGE_TEMPLATES
-from .models import EmailStatus, OutboundEmail, queue_email
+from .models import EmailStatus, OutboundEmail, queue_email, deliver_now
 
 
 @admin.register(OutboundEmail)
@@ -129,9 +129,8 @@ class OutboundEmailAdmin(UnfoldModelAdmin):
 
                 messages.success(
                     request,
-                    f"Queued for {len(addresses)} recipient"
-                    f"{'' if len(addresses) == 1 else 's'}. "
-                    "It goes out on the next send_queued_email run.",
+                    f"Successfully sent instant email to {len(addresses)} recipient"
+                    f"{'' if len(addresses) == 1 else 's'}.",
                 )
                 return redirect("admin:integrations_outboundemail_changelist")
         else:

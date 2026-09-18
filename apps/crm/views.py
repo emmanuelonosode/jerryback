@@ -200,29 +200,7 @@ def create_draft(request):
         draft_data={"listingSlug": listing_slug or None},
     )
 
-    # SOMEBODY HAS STARTED AN APPLICATION. This is the earliest and warmest
-    # signal the site produces - further down the funnel than a callback and
-    # with a specific house attached - and until now it was silent. Two of the
-    # three applications on the system are drafts that were started and never
-    # finished, and nobody knew to ring either of them.
-    #
-    # There is no contact detail yet: the draft is created when the form opens,
-    # before a single field is filled. What it gives you is a house and a
-    # clock, and `submit_draft` follows with the person's details.
-    notify_staff(
-        subject=f"Application started{f' - {home}' if home else ''}",
-        body=describe([
-            ("Home", home or "not chosen yet"),
-            ("Started", _timezone.localtime().strftime("%a %d %b, %H:%M")),
-            ("Open in admin", admin_link(f"crm/rentalapplication/{application.id}/change")),
-        ]) + (
-            "\n\nThis fires when someone opens the application form, so their "
-            "details are not filled in yet. If no 'Application submitted' "
-            "follows this within an hour or so, somebody got stuck part way "
-            "through and is worth chasing.\n"
-        ),
-        kind="application-started",
-    )
+
     return Response(_draft_payload(application), status=_http.HTTP_201_CREATED)
 
 

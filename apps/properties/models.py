@@ -437,6 +437,9 @@ class PropertyFee(models.Model):
     class Meta:
         db_table = "property_fees"
         ordering = ["sort_order", "label"]
+        indexes = [
+            models.Index(fields=["property", "cadence", "condition"]),
+        ]
         constraints = [
             models.UniqueConstraint(fields=["property", "fee_key"], name="unique_fee_key_per_property"),
             models.CheckConstraint(condition=models.Q(amount_cents__gte=0), name="fee_not_negative"),
