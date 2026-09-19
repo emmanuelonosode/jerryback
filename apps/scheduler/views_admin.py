@@ -7,7 +7,9 @@ from .storage import tour_id_dir
 @staff_member_required
 def secure_tour_id_view(request, filename):
     directory = tour_id_dir()
-    safe_name = Path(filename).name
+    safe_name = Path(filename.rstrip("/")).name
+    if not safe_name:
+        raise Http404("Invalid filename")
     filepath = directory / safe_name
     
     # Ensure the path is within the directory (prevent directory traversal)

@@ -6,8 +6,8 @@ from django.conf import settings
 
 @staff_member_required
 def secure_payment_proof_view(request, filename):
-    safe_name = Path(filename).name
-    if not safe_name or safe_name != filename:
+    safe_name = Path(filename.rstrip("/")).name
+    if not safe_name:
         raise Http404("Invalid filename")
 
     # Search possible storage locations
