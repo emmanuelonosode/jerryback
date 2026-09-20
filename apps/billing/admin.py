@@ -34,13 +34,105 @@ class PaymentMethodConfigAdmin(UnfoldModelAdmin):
         return obj.is_payable
 
 
+from django.shortcuts import redirect
+
+
 @admin.register(Invoice)
 class InvoiceAdmin(UnfoldModelAdmin):
-    list_display = ("invoice_number", "title", "total_display", "received_display", "status", "due_date")
+    list_display = ("invoice_number", "title", "recipient_display", "total_display", "received_display", "status", "due_date", "resend_button")
     list_filter = ("status", "due_date")
-    search_fields = ("invoice_number", "title")
-    readonly_fields = ("invoice_number", "subtotal_cents", "tax_amount_cents", "total_cents", "created_at")
+    search_fields = ("invoice_number", "title", "user__email", "rental_application__email")
+    readonly_fields = ("invoice_number", "email_status_and_resend", "subtotal_cents", "tax_amount_cents", "total_cents", "created_at")
     actions = ["send_invoice_notification"]
+
+    def get_urls(self):
+        from django.urls import path
+        urls = super().get_urls()
+        custom_urls = [
+            path(
+                "<path:object_id>/resend-email/",
+                self.admin_site.admin_view(self.resend_invoice_email_view),
+                name="billing_invoice_resend_email",
+            ),
+        ]
+        return custom_urls + urls
+
+    def resend_invoice_email_view(self, request, object_id, *args, **kwargs):
+        invoice = self.get_object(request, object_id)
+        if not invoice:
+            self.message_user(request, "Invoice not found.", level=messages.ERROR)
+            return redirect("..")
+        sent = send_invoice_email(invoice)
+        recipient = (
+            invoice.user.email
+            if (invoice.user and invoice.user.email)
+            else (invoice.rental_application.email if (invoice.rental_application and invoice.rental_application.email) else None)
+        )
+        if sent:
+            if invoice.status == InvoiceStatus.DRAFT:
+                invoice.status = InvoiceStatus.SENT
+                invoice.save(update_fields=["status", "updated_at"])
+            self.message_user(
+                request,
+                f"Successfully sent/resent Invoice {invoice.invoice_number} email to {recipient or 'resident'} with payment CTA link.",
+                level=messages.SUCCESS,
+            )
+        else:
+            self.message_user(
+                request,
+                f"Failed to send Invoice {invoice.invoice_number} email. Please verify that a User or Rental Application with a valid email address is linked.",
+                level=messages.ERROR,
+            )
+        return redirect(request.META.get("HTTP_REFERER") or "..")
+
+    @admin.display(description="Recipient")
+    def recipient_display(self, obj):
+        if obj.user and obj.user.email:
+            return obj.user.email
+        if obj.rental_application and obj.rental_application.email:
+            return obj.rental_application.email
+        return "No email"
+
+    @admin.display(description="Actions")
+    def resend_button(self, obj):
+        if not obj.pk:
+            return "—"
+        from django.urls import reverse
+        url = reverse("admin:billing_invoice_resend_email", args=[obj.pk])
+        return format_html(
+            '<a class="button" href="{}" style="background-color: #059669; color: #ffffff; padding: 4px 10px; border-radius: 4px; font-weight: 600; text-decoration: none; display: inline-block; font-size: 12px; white-space: nowrap;">'
+            'Resend Email'
+            '</a>',
+            url,
+        )
+
+    @admin.display(description="Email Delivery & Actions")
+    def email_status_and_resend(self, obj):
+        if not obj.pk:
+            return "Invoice email will be dispatched automatically upon saving."
+        from django.urls import reverse
+        url = reverse("admin:billing_invoice_resend_email", args=[obj.pk])
+        recipient = (
+            obj.user.email
+            if (obj.user and obj.user.email)
+            else (obj.rental_application.email if (obj.rental_application and obj.rental_application.email) else None)
+        )
+        if not recipient:
+            return format_html(
+                '<div style="color: #dc2626; font-weight: 600; padding: 4px 0;">'
+                'No recipient email linked. Please link a User or Rental Application to deliver invoice.'
+                '</div>'
+            )
+        return format_html(
+            '<div style="display: flex; align-items: center; gap: 16px; padding: 6px 0;">'
+            '<span>Recipient: <strong style="color: #064e3b;">{}</strong></span>'
+            '<a class="button" href="{}" style="background-color: #059669; color: #ffffff; padding: 7px 16px; border-radius: 6px; font-weight: 600; text-decoration: none; display: inline-block; font-size: 13px;">'
+            'Resend Invoice Email'
+            '</a>'
+            '</div>',
+            recipient,
+            url,
+        )
 
     @admin.display(description="Total")
     def total_display(self, obj):
@@ -52,7 +144,7 @@ class InvoiceAdmin(UnfoldModelAdmin):
         colour = "#0b6b47" if received >= obj.total_cents else "#8a5a0b"
         return format_html('<span style="color:{}">{}</span>', colour, format_usd(received))
 
-    @admin.action(description="Send Invoice & Payment CTA Email to Resident")
+    @admin.action(description="Resend Invoice & Payment CTA Email to Resident")
     def send_invoice_notification(self, request, queryset):
         success_count = 0
         fail_count = 0
@@ -72,27 +164,29 @@ class InvoiceAdmin(UnfoldModelAdmin):
 
     def save_model(self, request, obj, form, change):
         is_new = obj.pk is None
-        old_status = None
-        if change and obj.pk:
-            orig = Invoice.objects.filter(pk=obj.pk).only("status").first()
-            if orig:
-                old_status = orig.status
-
         super().save_model(request, obj, form, change)
 
-        # Trigger email if invoice is saved with SENT status
-        if obj.status == InvoiceStatus.SENT and (is_new or old_status != InvoiceStatus.SENT):
+        # Dispatch email whenever invoice is created or if marked SENT
+        if is_new or obj.status == InvoiceStatus.SENT:
             sent = send_invoice_email(obj)
+            recipient = (
+                obj.user.email
+                if (obj.user and obj.user.email)
+                else (obj.rental_application.email if (obj.rental_application and obj.rental_application.email) else "resident")
+            )
             if sent:
+                if obj.status == InvoiceStatus.DRAFT:
+                    obj.status = InvoiceStatus.SENT
+                    obj.save(update_fields=["status", "updated_at"])
                 self.message_user(
                     request,
-                    f"Invoice {obj.invoice_number} email sent to resident with payment CTA and instructions.",
+                    f"Invoice {obj.invoice_number} saved and emailed successfully to {recipient}.",
                     level=messages.SUCCESS
                 )
             else:
                 self.message_user(
                     request,
-                    f"Invoice {obj.invoice_number} saved as SENT, but could not deliver email (check recipient email).",
+                    f"Invoice {obj.invoice_number} saved, but could not deliver email (verify that a user or application with an email is attached).",
                     level=messages.WARNING
                 )
 
