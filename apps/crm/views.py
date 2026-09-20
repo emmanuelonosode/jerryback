@@ -739,7 +739,7 @@ def lease_agreement_latest(request):
         )
 
     if app:
-        return lease_agreement_detail(request, app.id)
+        return lease_agreement_detail(request._request, app.id)
 
     return Response({"detail": "No active lease agreement found."}, status=_http.HTTP_404_NOT_FOUND)
 
