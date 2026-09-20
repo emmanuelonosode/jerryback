@@ -52,7 +52,9 @@ def send_invoice_email(invoice: Invoice) -> bool:
     manual_sections = []
 
     for method in active_methods:
-        lines = [f"[{method.display_name}]"]
+        kind_name = method.get_method_display()
+        header = f"[{kind_name}]" if not method.display_name or method.display_name == kind_name else f"[{kind_name} - {method.display_name}]"
+        lines = [header]
         if method.handle:
             lines.append(f"  Handle / Account ID: {method.handle}")
         if method.recipient_name:
