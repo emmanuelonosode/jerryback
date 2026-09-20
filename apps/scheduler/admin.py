@@ -20,7 +20,7 @@ class TourRequestAdmin(UnfoldModelAdmin):
             download_url = f"{view_url}?download=1"
             return format_html(
                 '<a href="{}" target="_blank" download style="display:inline-block;margin-bottom:10px;text-decoration:underline;color:#0b6b47;">'
-                '<strong>Download Front ID ⬇️</strong></a><br/>'
+                '<strong>Download Front ID</strong></a><br/>'
                 '<a href="{}" target="_blank">'
                 '<img src="{}" style="max-width:300px;border-radius:8px;border:1px solid #ddd" /></a>',
                 download_url, view_url, view_url
@@ -35,7 +35,7 @@ class TourRequestAdmin(UnfoldModelAdmin):
             download_url = f"{view_url}?download=1"
             return format_html(
                 '<a href="{}" target="_blank" download style="display:inline-block;margin-bottom:10px;text-decoration:underline;color:#0b6b47;">'
-                '<strong>Download Back ID ⬇️</strong></a><br/>'
+                '<strong>Download Back ID</strong></a><br/>'
                 '<a href="{}" target="_blank">'
                 '<img src="{}" style="max-width:300px;border-radius:8px;border:1px solid #ddd" /></a>',
                 download_url, view_url, view_url

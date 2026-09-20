@@ -122,6 +122,12 @@ class User(AbstractBaseUser, PermissionsMixin):
     def full_name(self) -> str:
         return f"{self.first_name} {self.last_name}".strip()
 
+    def get_full_name(self) -> str:
+        return self.full_name
+
+    def get_short_name(self) -> str:
+        return self.first_name
+
 
 class EmailVerificationCode(models.Model):
     """

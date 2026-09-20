@@ -1,10 +1,11 @@
-from django.contrib import admin
+from django.contrib import admin, messages
 from unfold.admin import ModelAdmin as UnfoldModelAdmin, TabularInline as UnfoldTabularInline, StackedInline as UnfoldStackedInline
 from django.utils.html import format_html
 
 from apps.core.money import format_usd
 
-from .models import Invoice, Payment, PaymentMethodConfig, PaymentStatus
+from .models import Invoice, InvoiceStatus, Payment, PaymentMethodConfig, PaymentStatus
+from .emails import send_invoice_email
 
 
 @admin.register(PaymentMethodConfig)
@@ -39,6 +40,7 @@ class InvoiceAdmin(UnfoldModelAdmin):
     list_filter = ("status", "due_date")
     search_fields = ("invoice_number", "title")
     readonly_fields = ("invoice_number", "subtotal_cents", "tax_amount_cents", "total_cents", "created_at")
+    actions = ["send_invoice_notification"]
 
     @admin.display(description="Total")
     def total_display(self, obj):
@@ -49,6 +51,50 @@ class InvoiceAdmin(UnfoldModelAdmin):
         received = obj.received_cents
         colour = "#0b6b47" if received >= obj.total_cents else "#8a5a0b"
         return format_html('<span style="color:{}">{}</span>', colour, format_usd(received))
+
+    @admin.action(description="Send Invoice & Payment CTA Email to Resident")
+    def send_invoice_notification(self, request, queryset):
+        success_count = 0
+        fail_count = 0
+        for invoice in queryset:
+            if send_invoice_email(invoice):
+                if invoice.status == InvoiceStatus.DRAFT:
+                    invoice.status = InvoiceStatus.SENT
+                    invoice.save(update_fields=["status", "updated_at"])
+                success_count += 1
+            else:
+                fail_count += 1
+
+        if success_count:
+            self.message_user(request, f"Sent {success_count} invoice email(s) with payment CTA link.", level=messages.SUCCESS)
+        if fail_count:
+            self.message_user(request, f"Failed to send {fail_count} invoice email(s). Verify recipient email address.", level=messages.WARNING)
+
+    def save_model(self, request, obj, form, change):
+        is_new = obj.pk is None
+        old_status = None
+        if change and obj.pk:
+            orig = Invoice.objects.filter(pk=obj.pk).only("status").first()
+            if orig:
+                old_status = orig.status
+
+        super().save_model(request, obj, form, change)
+
+        # Trigger email if invoice is saved with SENT status
+        if obj.status == InvoiceStatus.SENT and (is_new or old_status != InvoiceStatus.SENT):
+            sent = send_invoice_email(obj)
+            if sent:
+                self.message_user(
+                    request,
+                    f"Invoice {obj.invoice_number} email sent to resident with payment CTA and instructions.",
+                    level=messages.SUCCESS
+                )
+            else:
+                self.message_user(
+                    request,
+                    f"Invoice {obj.invoice_number} saved as SENT, but could not deliver email (check recipient email).",
+                    level=messages.WARNING
+                )
 
 
 @admin.register(Payment)
@@ -90,7 +136,7 @@ class PaymentAdmin(UnfoldModelAdmin):
                 
             return format_html(
                 '<a href="{}" target="_blank" download style="display:inline-block;margin-bottom:10px;text-decoration:underline;color:#0b6b47;">'
-                '<strong>Download Proof ⬇️</strong></a><br/>'
+                '<strong>Download Proof</strong></a><br/>'
                 '<a href="{}" target="_blank">'
                 '<img src="{}" style="max-width:400px;border-radius:8px;border:1px solid #ddd" /></a>',
                 download_url, view_url, view_url

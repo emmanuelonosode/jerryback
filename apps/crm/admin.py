@@ -147,9 +147,9 @@ class RentalApplicationAdmin(UnfoldModelAdmin):
     @admin.display(description="Lease Status")
     def lease_progress(self, obj):
         if obj.lease_signed_at:
-            return format_html('<span style="color:#0b6b47;font-weight:600">✓ Signed</span>')
+            return format_html('<span style="color:#0b6b47;font-weight:600">Signed</span>')
         if obj.lease_sent_at:
-            return format_html('<span style="color:#2563eb;font-weight:600">✉ Sent</span>')
+            return format_html('<span style="color:#2563eb;font-weight:600">Sent</span>')
         return format_html('<span style="color:#8892a0">Not sent</span>')
 
 

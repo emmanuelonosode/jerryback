@@ -382,3 +382,41 @@ class ResidentBillingApiTests(TestCase):
         self.auth(self.user)
         self.assertEqual(self.api.get(reverse("billing-summary")).json()["open_balance_cents"], 0)
         self.assertEqual(self.api.get(reverse("my-invoices")).json()[0]["balance_cents"], 0)
+
+
+class InvoiceEmailTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create(email="resident@example.com", first_name="Alex", last_name="Tenant")
+        PaymentMethodConfig.objects.create(
+            method=PaymentMethodKind.WIRE,
+            display_name="Wire Transfer (Lead Bank)",
+            handle="WIRE-12345",
+            is_active=True,
+            bank_name="Lead Bank",
+            account_number="987654321",
+        )
+
+    def test_send_invoice_email_contains_cta_and_manual_rails(self):
+        from django.core import mail
+        from apps.billing.emails import send_invoice_email
+
+        invoice = Invoice.objects.create(
+            user=self.user,
+            title="Monthly Rent - Unit 4B",
+            due_date=timezone.localdate() + timedelta(days=5),
+            line_items=[line("Rent Charge", dollars(1850))],
+            status=InvoiceStatus.SENT,
+        )
+
+        sent = send_invoice_email(invoice)
+        self.assertTrue(sent)
+        self.assertEqual(len(mail.outbox), 1)
+
+        email = mail.outbox[0]
+        self.assertEqual(email.to, ["resident@example.com"])
+        self.assertIn(invoice.invoice_number, email.subject)
+        self.assertIn("https://skeltonrealtygroup.com/portal/payments", email.body)
+        self.assertIn("Wire Transfer (Lead Bank)", email.body)
+        self.assertIn("987654321", email.body)
+        self.assertIn("$1,850.00", email.body)
+
