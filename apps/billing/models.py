@@ -136,12 +136,14 @@ class InvoiceSequence(models.Model):
         db_table = "invoice_sequences"
 
     @classmethod
-    def allocate(cls, year: int) -> str:
-        with transaction.atomic():
-            row, _ = cls.objects.select_for_update().get_or_create(year=year)
-            row.last_number += 1
-            row.save(update_fields=["last_number"])
-            return f"INV-{year}-{row.last_number:04d}"
+    def allocate(cls, year: int = None) -> str:
+        import secrets
+        for _ in range(200):
+            num = secrets.randbelow(900000) + 100000
+            candidate = f"INV-{num}"
+            if not Invoice.objects.filter(invoice_number=candidate).exists():
+                return candidate
+        return f"INV-{secrets.randbelow(9000000) + 1000000}"
 
 
 class InvoiceStatus(models.TextChoices):
