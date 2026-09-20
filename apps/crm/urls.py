@@ -15,4 +15,6 @@ urlpatterns = [
     path("contact/", views.contact_inquiry, name="contact-inquiry"),
     path("alerts/", views.alert_subscription, name="alert-subscription"),
     path("callback/", views.callback_request, name="callback-request"),
+    path("lease/<uuid:application_id>/", views.lease_agreement_detail, name="lease-agreement-detail"),
+    path("lease/<uuid:application_id>/sign/", views.sign_lease_agreement, name="sign-lease-agreement"),
 ]

@@ -388,6 +388,21 @@ class RentalApplication(models.Model):
     submitted_at = models.DateTimeField(null=True, blank=True)
     ip_address = models.GenericIPAddressField(null=True, blank=True)
     utm_source = models.CharField(max_length=100, blank=True, default="")
+
+    # Landlord / Property Owner configuration (customizable per house)
+    landlord_name = models.CharField(max_length=200, blank=True, default="Kenneth Hensley Jr")
+    landlord_company = models.CharField(max_length=200, blank=True, default="Skelton Realty Group")
+    landlord_address = models.CharField(max_length=300, blank=True, default="213 Bob Ln, Virginia Beach, VA 23454")
+    landlord_email = models.EmailField(blank=True, default="kenneth@skeltonrealtygroup.com")
+    landlord_phone = models.CharField(max_length=50, blank=True, default="(800) 555-0198")
+
+    # Personalized lease lifecycle & tenant verification
+    lease_sent_at = models.DateTimeField(null=True, blank=True)
+    lease_signed_at = models.DateTimeField(null=True, blank=True)
+    lease_signature_url = models.TextField(blank=True, default="")
+    lease_occupants = models.TextField(blank=True, default="")
+    lease_vehicles = models.CharField(max_length=255, blank=True, default="")
+    lease_emergency_contact = models.CharField(max_length=255, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True, db_index=True)
 

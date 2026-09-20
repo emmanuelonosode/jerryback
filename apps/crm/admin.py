@@ -1,4 +1,7 @@
-from django.contrib import admin
+from django.contrib import admin, messages
+from django.conf import settings
+from django.core.mail import send_mail
+from django.utils import timezone
 from unfold.admin import ModelAdmin as UnfoldModelAdmin, TabularInline as UnfoldTabularInline, StackedInline as UnfoldStackedInline
 from django.utils.html import escape, format_html
 from django.utils.safestring import mark_safe
@@ -56,13 +59,99 @@ class LeadAdmin(UnfoldModelAdmin):
 
 @admin.register(RentalApplication)
 class RentalApplicationAdmin(UnfoldModelAdmin):
-    list_display = ("applicant", "status", "property", "move_in_terms", "deadline", "created_at")
+    list_display = ("applicant", "status", "property", "lease_progress", "move_in_terms", "deadline", "created_at")
     list_filter = ("status",)
     search_fields = ("first_name", "last_name", "email")
+    actions = ["send_personalized_lease"]
     readonly_fields = (
         "verified_at", "decision_due_at", "decided_at", "created_at", "updated_at",
-        "move_in_preview", "submitted_application",
+        "move_in_preview", "submitted_application", "lease_signing_link",
     )
+
+    fieldsets = [
+        ("Applicant Information", {
+            "fields": ("first_name", "last_name", "email", "cell_phone", "status", "property", "user"),
+        }),
+        ("Move-In Terms & Breakdown", {
+            "fields": ("move_in_date", "months_rent_upfront", "security_deposit_cents", "lease_admin_fee_cents", "pet_fee_cents", "move_in_preview"),
+        }),
+        ("Landlord / Owner Details (Specific to this House)", {
+            "description": "Specify the exact Landlord/Owner entity and contact details for this property.",
+            "fields": ("landlord_name", "landlord_company", "landlord_address", "landlord_email", "landlord_phone"),
+        }),
+        ("Personalized Lease Tracking", {
+            "fields": ("lease_sent_at", "lease_signed_at", "lease_occupants", "lease_vehicles", "lease_emergency_contact", "lease_signing_link"),
+        }),
+        ("Application Submission Data", {
+            "fields": ("submitted_application", "decision_due_at", "decided_at", "created_at", "updated_at"),
+        }),
+    ]
+
+    @admin.action(description="Send Personalized Lease Agreement to selected applicants")
+    def send_personalized_lease(self, request, queryset):
+        sent_count = 0
+        links = []
+        for app in queryset:
+            app.lease_sent_at = timezone.now()
+            app.save(update_fields=["lease_sent_at"])
+            link = f"https://skeltonrealtygroup.com/lease-agreement?app_id={app.id}"
+            links.append(f"{app.first_name or app.email}: {link}")
+
+            # Send invitation email to applicant
+            if app.email:
+                prop_title = app.property.title if app.property else "your rental property"
+                subject = f"Your Skelton Realty Group Lease Agreement for {prop_title}"
+                body = (
+                    f"Hello {app.first_name or 'Resident'},\n\n"
+                    f"Your personalized Residential Lease Agreement has been prepared for {prop_title}.\n\n"
+                    f"Please review the 41-clause lease terms, confirm your move-in details, and sign electronically here:\n"
+                    f"{link}\n\n"
+                    f"Landlord / Managing Agent: {app.landlord_name} ({app.landlord_company})\n"
+                    f"Notice Contact: {app.landlord_email} | {app.landlord_phone}\n\n"
+                    f"Best regards,\n"
+                    f"Skelton Realty Group Leasing Operations"
+                )
+                try:
+                    send_mail(
+                        subject,
+                        body,
+                        getattr(settings, "DEFAULT_FROM_EMAIL", "info@skeltonrealtygroup.com"),
+                        [app.email],
+                        fail_silently=True,
+                    )
+                except Exception:
+                    pass
+            sent_count += 1
+
+        formatted_links = "<br>".join(links)
+        self.message_user(
+            request,
+            format_html(
+                "Personalized lease agreement sent to {} applicant(s).<br>Direct links:<br>{}",
+                sent_count,
+                mark_safe(formatted_links),
+            ),
+            level=messages.SUCCESS,
+        )
+
+    @admin.display(description="Direct Signing Link")
+    def lease_signing_link(self, obj):
+        if not obj or not obj.id:
+            return "Save application to generate link."
+        link = f"https://skeltonrealtygroup.com/lease-agreement?app_id={obj.id}"
+        return format_html(
+            '<a href="{}" target="_blank" rel="noopener noreferrer" style="color:#2563eb;font-weight:600;text-decoration:underline;">Open Personalized Lease Agreement →</a>',
+            link,
+        )
+
+    @admin.display(description="Lease Status")
+    def lease_progress(self, obj):
+        if obj.lease_signed_at:
+            return format_html('<span style="color:#0b6b47;font-weight:600">✓ Signed</span>')
+        if obj.lease_sent_at:
+            return format_html('<span style="color:#2563eb;font-weight:600">✉ Sent</span>')
+        return format_html('<span style="color:#8892a0">Not sent</span>')
+
 
     @admin.display(description="What the applicant filled in")
     def submitted_application(self, obj):

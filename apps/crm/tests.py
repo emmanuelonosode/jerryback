@@ -697,3 +697,62 @@ class DeclaredPaymentReachesTheAdminTests(TestCase):
         self.draft.refresh_from_db()
         self.assertTrue(self.draft.is_fee_paid)
         self.assertIsNotNone(self.draft.decision_due_at)
+
+
+class PersonalizedLeaseTests(TestCase):
+    def setUp(self):
+        self.home = make_property(
+            address="500 Elm St", city="Detroit", state="MI", zip_code="48201",
+            bedrooms=3, price_cents=dollars(1500),
+        )
+        self.app = RentalApplication.objects.create(
+            status=ApplicationStatus.APPROVED,
+            property=self.home,
+            first_name="Marcus",
+            last_name="Vance",
+            email="marcus@example.com",
+            cell_phone="555-9876",
+            application_fee_cents=dollars(55),
+            security_deposit_cents=dollars(1500),
+            move_in_date=timezone.now().date(),
+            landlord_name="Jane Smith Properties LLC",
+            landlord_company="Jane Smith Holdings",
+            landlord_address="100 Grand Ave, Detroit, MI 48201",
+            landlord_email="jane@smithholdings.com",
+            landlord_phone="(313) 555-0122",
+        )
+
+    def test_lease_detail_returns_custom_landlord_and_applicant_data(self):
+        url = f"/api/v1/leads/lease/{self.app.id}/"
+        res = self.client.get(url)
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data["application_id"], str(self.app.id))
+        self.assertEqual(data["tenant"]["name"], "Marcus Vance")
+        self.assertEqual(data["tenant"]["email"], "marcus@example.com")
+        self.assertEqual(data["landlord"]["name"], "Jane Smith Properties LLC")
+        self.assertEqual(data["landlord"]["company"], "Jane Smith Holdings")
+        self.assertEqual(data["landlord"]["email"], "jane@smithholdings.com")
+        self.assertEqual(data["financials"]["monthly_rent"], "$1,500.00")
+        self.assertFalse(data["is_signed"])
+
+    def test_sign_lease_updates_signature_and_occupants(self):
+        url = f"/api/v1/leads/lease/{self.app.id}/sign/"
+        payload = {
+            "signature_url": "data:image/png;base64,sample_signature_data",
+            "signer_name": "Marcus Vance",
+            "occupants": "Marcus Vance, Elena Vance",
+            "vehicles": "2023 Toyota RAV4 (Plate: MICH-888)",
+            "emergency_contact": "Robert Vance (Brother) - 555-1122",
+        }
+        res = self.client.post(url, data=payload, content_type="application/json")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["status"], "signed")
+
+        self.app.refresh_from_db()
+        self.assertIsNotNone(self.app.lease_signed_at)
+        self.assertEqual(self.app.lease_signature_url, "data:image/png;base64,sample_signature_data")
+        self.assertEqual(self.app.lease_occupants, "Marcus Vance, Elena Vance")
+        self.assertEqual(self.app.lease_vehicles, "2023 Toyota RAV4 (Plate: MICH-888)")
+        self.assertEqual(self.app.lease_emergency_contact, "Robert Vance (Brother) - 555-1122")
+

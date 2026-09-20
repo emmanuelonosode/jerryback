@@ -561,3 +561,158 @@ def alert_subscription(request):
     )
     return Response({"status": "subscribed", "lead_id": str(lead.id)})
 
+
+# ===========================================================================
+# Personalized Lease Agreement Endpoints
+# ===========================================================================
+
+from django.shortcuts import get_object_or_404  # noqa: E402
+from datetime import timedelta  # noqa: E402
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def lease_agreement_detail(request, application_id):
+    """
+    Returns personalized lease agreement data for an application.
+    Accessible to authorized staff or the applicant via their secure link.
+    """
+    app = get_object_or_404(
+        RentalApplication.objects.select_related("property", "user"),
+        id=application_id,
+    )
+
+    prop = app.property
+    state_name = f"State of {prop.state}" if (prop and prop.state) else "State of Michigan"
+    full_address = (
+        f"{prop.address}, {prop.city}, {prop.state} {prop.zip_code}".strip(", ")
+        if prop
+        else (app.present_address or "200 Cleveland Ave, Kingsford, MI 49802")
+    )
+
+    bedrooms = f"{prop.bedrooms} ({prop.bedrooms})" if (prop and prop.bedrooms) else "two (2)"
+    bathrooms = f"{prop.bathrooms} ({prop.bathrooms})" if (prop and prop.bathrooms) else "two (2)"
+    parking = "one (1)"
+
+    monthly_rent_cents = prop.price_cents if (prop and prop.price_cents) else 100000
+    monthly_rent = f"${monthly_rent_cents / 100:,.2f}"
+    annual_rent = f"${(monthly_rent_cents * 12) / 100:,.2f}"
+
+    deposit_cents = app.security_deposit_cents or monthly_rent_cents
+    deposit_formatted = f"${deposit_cents / 100:,.2f}"
+
+    pet_deposit_cents = app.pet_fee_cents or 10000
+    pet_deposit_formatted = f"${pet_deposit_cents / 100:,.2f}"
+
+    # Dates
+    start_date_obj = app.move_in_date or _timezone.now().date()
+    end_date_obj = start_date_obj + timedelta(days=364)
+    start_date_str = start_date_obj.strftime("%B %d, %Y")
+    end_date_str = end_date_obj.strftime("%B %d, %Y")
+    agreement_date_str = (app.lease_sent_at or _timezone.now()).strftime("%B %d, %Y")
+
+    tenant_name = f"{app.first_name} {app.last_name}".strip() or "Jeremy Shiner"
+    tenant_email = app.email or "resident@example.com"
+    tenant_phone = app.cell_phone or ""
+    tenant_address = full_address
+
+    # Landlord configuration (customized per house or defaults)
+    landlord_name = app.landlord_name or "Kenneth Hensley Jr"
+    landlord_company = app.landlord_company or "Skelton Realty Group"
+    landlord_address = app.landlord_address or "213 Bob Ln, Virginia Beach, VA 23454"
+    landlord_email = app.landlord_email or "kenneth@skeltonrealtygroup.com"
+    landlord_phone = app.landlord_phone or "(800) 555-0198"
+
+    return Response({
+        "application_id": str(app.id),
+        "status": app.status,
+        "is_signed": bool(app.lease_signed_at),
+        "signed_at": app.lease_signed_at.strftime("%B %d, %Y at %I:%M %p") if app.lease_signed_at else None,
+        "signature_url": app.lease_signature_url or None,
+        "occupants": app.lease_occupants or "",
+        "vehicles": app.lease_vehicles or "",
+        "emergency_contact": app.lease_emergency_contact or "",
+        "tenant": {
+            "name": tenant_name,
+            "email": tenant_email,
+            "phone": tenant_phone,
+            "address": tenant_address,
+        },
+        "landlord": {
+            "name": landlord_name,
+            "company": landlord_company,
+            "address": landlord_address,
+            "email": landlord_email,
+            "phone": landlord_phone,
+        },
+        "property": {
+            "id": str(prop.id) if prop else None,
+            "title": prop.title if prop else None,
+            "address": prop.address if prop else "200 Cleveland Ave",
+            "city": prop.city if prop else "Kingsford",
+            "state": prop.state if prop else "MI",
+            "zip_code": prop.zip_code if prop else "49802",
+            "full_address": full_address,
+            "bedrooms": bedrooms,
+            "bathrooms": bathrooms,
+            "parking_spaces": parking,
+        },
+        "financials": {
+            "monthly_rent": monthly_rent,
+            "annual_rent": annual_rent,
+            "security_deposit": deposit_formatted,
+            "pet_deposit": pet_deposit_formatted,
+            "rent_due_day": "5th",
+        },
+        "dates": {
+            "state_name": state_name,
+            "agreement_date": agreement_date_str,
+            "term_start_date": start_date_str,
+            "term_end_date": end_date_str,
+        },
+    })
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def sign_lease_agreement(request, application_id):
+    """
+    Submits electronic signature and tenant questionnaire answers.
+    Persists to database and timestamps the signed agreement.
+    """
+    app = get_object_or_404(RentalApplication, id=application_id)
+    data = request.data or {}
+
+    signature_url = data.get("signature_url") or ""
+    signer_name = (data.get("signer_name") or "").strip()
+
+    if not signature_url or not signer_name:
+        return Response(
+            {"detail": "A valid signature and signer name are required."},
+            status=_http.HTTP_400_BAD_REQUEST,
+        )
+
+    now = _timezone.now()
+    app.lease_signature_url = signature_url
+    app.lease_signed_at = now
+
+    if "occupants" in data:
+        app.lease_occupants = str(data["occupants"]).strip()
+    if "vehicles" in data:
+        app.lease_vehicles = str(data["vehicles"]).strip()
+    if "emergency_contact" in data:
+        app.lease_emergency_contact = str(data["emergency_contact"]).strip()
+
+    app.save(update_fields=[
+        "lease_signature_url", "lease_signed_at",
+        "lease_occupants", "lease_vehicles", "lease_emergency_contact", "updated_at",
+    ])
+
+    return Response({
+        "status": "signed",
+        "signed_at": now.strftime("%B %d, %Y at %I:%M %p"),
+        "signer_name": signer_name,
+        "application_id": str(app.id),
+    })
+
+
