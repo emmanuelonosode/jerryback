@@ -41,7 +41,6 @@ class PropertyType(models.TextChoices):
 # Statuses a member of the public may see at all.
 PUBLIC_STATUSES = [
     PropertyStatus.AVAILABLE, PropertyStatus.COMING_SOON,
-    PropertyStatus.APPLICATION_PENDING, PropertyStatus.LEASED,
 ]
 # Statuses that count as live inventory for hub counts and thresholds.
 RENTABLE_STATUSES = [PropertyStatus.AVAILABLE, PropertyStatus.COMING_SOON]

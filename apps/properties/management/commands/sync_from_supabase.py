@@ -43,6 +43,7 @@ from apps.properties.models import (
     PropertyAmenity,
     PropertyFee,
     PropertyImage,
+    PropertyStatus,
 )
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://okrlwuoqnwujffzyzazw.supabase.co")
@@ -50,7 +51,7 @@ SUPABASE_KEY = os.environ.get(
     "SUPABASE_KEY", "sb_publishable_zlmVAZvMIGGFYuM5Xd13cw_JGRt-2QH"
 )
 
-PAGE = 100
+PAGE = 1000
 
 # Past this share of live inventory, a retirement pass is treated as a fault
 # rather than as turnover. See the circuit breaker in `handle`.
@@ -195,6 +196,14 @@ class Command(BaseCommand):
             help=(
                 "Retire even when the count exceeds the safety ceiling. "
                 "Only for a genuine mass withdrawal."
+            ),
+        )
+        parser.add_argument(
+            "--delete-unavailable",
+            action="store_true",
+            help=(
+                "Delete old, leased, hold, or withdrawn properties and child rows from the database "
+                "(preserves any properties with active applications)."
             ),
         )
 
@@ -563,6 +572,22 @@ class Command(BaseCommand):
                 self.stderr.write(f"  {slug}: {error}")
 
         retired = 0
+        deleted_unavailable = 0
+
+        # Optional purge of existing unavailable/hold/leased properties
+        if options.get("delete_unavailable"):
+            unavail_qs = Property.objects.exclude(
+                status=PropertyStatus.AVAILABLE,
+                is_published=True,
+            ).exclude(applications__isnull=False)
+            del_count = unavail_qs.count()
+            if dry:
+                self.stdout.write(f"Would delete {del_count} existing unavailable/hold properties.")
+            else:
+                unavail_qs.delete()
+                deleted_unavailable += del_count
+                self.stdout.write(self.style.SUCCESS(f"Deleted {del_count} existing unavailable/hold properties."))
+
         if not options["no_retire"] and seen_ids:
             stale = Property.objects.filter(status="available").exclude(pk__in=seen_ids)
             retired = stale.count()
@@ -595,13 +620,21 @@ class Command(BaseCommand):
                 ))
                 retired = 0
             elif retired and not dry:
-                # Retired, not deleted: the page stays reachable for its grace
-                # window so an inbound link lands somewhere useful.
-                stale.update(status="leased", leased_at=started, updated_at=started)
+                if options.get("delete_unavailable"):
+                    stale_to_delete = stale.exclude(applications__isnull=False)
+                    stale_del = stale_to_delete.count()
+                    stale_to_delete.delete()
+                    deleted_unavailable += stale_del
+                    self.stdout.write(self.style.SUCCESS(f"Deleted {stale_del} stale properties that left the feed."))
+                else:
+                    # Retired, not deleted: the page stays reachable for its grace
+                    # window so an inbound link lands somewhere useful.
+                    stale.update(status="leased", leased_at=started, updated_at=started)
 
         verb = "Would sync" if dry else "Synced"
+        extra_del = f", {deleted_unavailable} deleted unavailable" if options.get("delete_unavailable") else ""
         self.stdout.write(self.style.SUCCESS(
             f"{verb}: {created} new, {updated} changed, {unchanged} unchanged, "
-            f"{retired} retired, {thin} skipped (under {MIN_IMAGES} photos), {failed} failed "
+            f"{retired} retired{extra_del}, {thin} skipped (under {MIN_IMAGES} photos), {failed} failed "
             f"({(timezone.now() - started).total_seconds():.0f}s)"
         ))
