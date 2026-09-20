@@ -51,7 +51,7 @@ SUPABASE_KEY = os.environ.get(
     "SUPABASE_KEY", "sb_publishable_zlmVAZvMIGGFYuM5Xd13cw_JGRt-2QH"
 )
 
-PAGE = 1000
+PAGE = 100
 
 # Past this share of live inventory, a retirement pass is treated as a fault
 # rather than as turnover. See the circuit breaker in `handle`.
