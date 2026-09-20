@@ -39,6 +39,8 @@ urlpatterns = [
     path("api/v1/auth/", include("apps.accounts.urls")),
     path("api/v1/properties/", include("apps.properties.urls")),
     path("api/v1/leads/", include("apps.crm.urls")),
+    path("api/v1/crm/", include("apps.crm.urls")),
+    path("api/v1/apply/", include("apps.crm.urls")),
     path("api/v1/billing/", include("apps.billing.urls")),
     path("api/v1/viewings/", include("apps.scheduler.urls")),
     path("api/v1/portal/", include("apps.portal.urls")),
