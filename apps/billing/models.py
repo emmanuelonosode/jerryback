@@ -191,9 +191,14 @@ class Invoice(models.Model):
         from apps.core.money import basis_points_of
 
         priced = []
-        for item in self.line_items:
-            qty = int(item.get("quantity", 1))
-            unit = int(item["unit_price_cents"])
+        for item in (self.line_items or []):
+            if not isinstance(item, dict):
+                continue
+            qty = int(item.get("quantity") or 1)
+            unit = item.get("unit_price_cents")
+            if unit is None:
+                unit = item.get("amount_cents") or item.get("price_cents") or 0
+            unit = int(unit)
             priced.append({**item, "quantity": qty, "unit_price_cents": unit, "total_cents": unit * qty})
         self.line_items = priced
         self.subtotal_cents = sum(i["total_cents"] for i in priced)

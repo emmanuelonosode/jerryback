@@ -380,6 +380,9 @@ CSRF_COOKIE_SAMESITE = "Lax"
 SESSION_EXPIRE_AT_BROWSER_CLOSE = False
 SESSION_COOKIE_AGE = 12 * 60 * 60  # A staff shift, not two weeks.
 
+# Behind a reverse proxy terminating TLS.
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+
 if not DEBUG:
     SECURE_SSL_REDIRECT = env("SECURE_SSL_REDIRECT")
     SESSION_COOKIE_SECURE = True
@@ -390,8 +393,6 @@ if not DEBUG:
     SECURE_CONTENT_TYPE_NOSNIFF = True
     SECURE_REFERRER_POLICY = "same-origin"
     X_FRAME_OPTIONS = "DENY"
-    # Behind a reverse proxy terminating TLS.
-    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
 # --- Integrations ------------------------------------------------------------
 
