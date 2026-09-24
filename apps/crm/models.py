@@ -390,12 +390,51 @@ class RentalApplication(models.Model):
     ip_address = models.GenericIPAddressField(null=True, blank=True)
     utm_source = models.CharField(max_length=100, blank=True, default="")
 
-    # Landlord / Property Owner configuration (customizable per house)
-    landlord_name = models.CharField(max_length=200, blank=True, default="Kenneth Hensley Jr")
-    landlord_company = models.CharField(max_length=200, blank=True, default="Skelton Realty Group")
-    landlord_address = models.CharField(max_length=300, blank=True, default="213 Bob Ln, Virginia Beach, VA 23454")
-    landlord_email = models.EmailField(blank=True, default="kenneth@skeltonrealtygroup.com")
-    landlord_phone = models.CharField(max_length=50, blank=True, default="(800) 555-0198")
+    # THE OWNER OF THE HOME, WHO IS THE LANDLORD ON THE LEASE.
+    #
+    # Homes are owned by companies and individual investors; Skelton manages
+    # them and signs as managing agent. Staff enter the owner per lease, and a
+    # lease cannot go out while `landlord_company` is blank. These used to
+    # default to one named person with a placeholder street and a reserved 555
+    # number, which put a party on every lease who was not party to it.
+    landlord_name = models.CharField(
+        "owner contact person", max_length=200, blank=True, default="",
+        help_text="Optional: the person who signs for the owning company.",
+    )
+    landlord_company = models.CharField(
+        "owner (landlord)", max_length=200, blank=True, default="",
+        help_text="The company or individual that owns the home. Required before a lease is sent.",
+    )
+    landlord_address = models.CharField("owner address for notices", max_length=300, blank=True, default="")
+    landlord_email = models.EmailField("owner email", blank=True, default="")
+    landlord_phone = models.CharField("owner phone", max_length=50, blank=True, default="")
+
+    # WHAT THE OWNER KNOWS, WHICH SOME STATES REQUIRE THE LEASE TO SAY. These
+    # are facts only the owner can supply; the lease never guesses them. Which
+    # ones a given lease needs depends on the home's state - see
+    # apps/crm/lease_states.py - and the lease cannot be sent while a required
+    # one is blank. "None known" is an answer; blank is not.
+    deposit_held_at = models.CharField(
+        "where the deposit is held", max_length=300, blank=True, default="",
+        help_text="Bank name and address, and whether the account earns interest. Required in FL, GA, NC, TN and WA.",
+    )
+    flood_zone_known = models.CharField(
+        "owner knows the home is in a flood zone", max_length=3, blank=True, default="",
+        choices=[("yes", "Yes"), ("no", "No")],
+        help_text="Is the owner aware the home is in a 100-year floodplain / special flood hazard area? Required in TX and CA.",
+    )
+    flood_history = models.TextField(
+        "flooding the owner knows of", blank=True, default="",
+        help_text="Flooding of the home in the last five years, or 'None known'. Required in TX and GA.",
+    )
+    lead_hazards_known = models.TextField(
+        "known lead paint hazards", blank=True, default="",
+        help_text="Known lead-based paint or hazards and any reports, or 'None known'. Required for homes built before 1978 or of unknown age.",
+    )
+    other_hazards_known = models.TextField(
+        "other things the owner must disclose", blank=True, default="",
+        help_text="Radon or mold test results, outstanding inspection or condemnation orders - or 'None known'. Required in CA, IL and MN.",
+    )
 
     # Personalized lease lifecycle & tenant verification
     lease_sent_at = models.DateTimeField(null=True, blank=True)
@@ -404,6 +443,26 @@ class RentalApplication(models.Model):
     lease_occupants = models.TextField(blank=True, default="")
     lease_vehicles = models.CharField(max_length=255, blank=True, default="")
     lease_emergency_contact = models.CharField(max_length=255, blank=True, default="")
+
+    # THE SIGNING RECORD. A drawn signature on its own proves little; what makes
+    # an electronic signature hold up is being able to show who signed, from
+    # where, having agreed to sign electronically, and exactly which text they
+    # signed. So the terms are frozen as JSON at the moment of signing and
+    # hashed, and the lease version is recorded - a later edit to the lease
+    # template cannot change what this person agreed to.
+    lease_signer_name = models.CharField(max_length=200, blank=True, default="")
+    lease_signed_ip = models.GenericIPAddressField(null=True, blank=True)
+    lease_signed_user_agent = models.CharField(max_length=400, blank=True, default="")
+    lease_consent_text = models.TextField(blank=True, default="")
+    lease_version = models.CharField(max_length=20, blank=True, default="")
+    lease_terms_snapshot = models.JSONField(default=dict, blank=True)
+    lease_terms_sha256 = models.CharField(max_length=64, blank=True, default="")
+    lease_countersigned_by = models.ForeignKey(
+        "accounts.User", null=True, blank=True, on_delete=models.SET_NULL, related_name="+",
+    )
+    lease_countersigned_name = models.CharField(max_length=200, blank=True, default="")
+    lease_countersigned_at = models.DateTimeField(null=True, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True, db_index=True)
 
@@ -462,3 +521,113 @@ class AdverseActionNotice(models.Model):
     class Meta:
         db_table = "adverse_action_notices"
         ordering = ["-created_at"]
+
+
+class Guarantor(models.Model):
+    """
+    Someone who agrees to cover the rent if the household cannot.
+
+    OPTIONAL, ALWAYS. An applicant adds one if they want to; staff may ask for
+    one as a condition of approval, which is an adverse action and generates
+    its notice - see AdverseActionNotice. Never a requirement of applying.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    application = models.OneToOneField(RentalApplication, on_delete=models.CASCADE, related_name="guarantor")
+    full_name = models.CharField(max_length=200)
+    relationship = models.CharField(max_length=100, blank=True, default="")
+    email = models.EmailField(blank=True, default="")
+    phone = models.CharField(max_length=20, blank=True, default="")
+    monthly_income_cents = models.BigIntegerField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "application_guarantors"
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(monthly_income_cents__isnull=True) | models.Q(monthly_income_cents__gte=0),
+                name="guarantor_income_not_negative",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return self.full_name
+
+
+class DocumentKind(models.TextChoices):
+    INCOME_PROOF = "INCOME_PROOF", "Proof of income"
+    ID = "ID", "Photo ID"
+    VOUCHER_LETTER = "VOUCHER_LETTER", "Housing voucher letter"
+    GUARANTOR_INFO = "GUARANTOR_INFO", "Guarantor details or documents"
+    OTHER = "OTHER", "Other"
+
+
+class DocumentRequestStatus(models.TextChoices):
+    REQUESTED = "REQUESTED", "Requested"
+    SUBMITTED = "SUBMITTED", "Submitted - waiting for review"
+    ACCEPTED = "ACCEPTED", "Accepted"
+    REJECTED = "REJECTED", "Needs another upload"
+
+
+class DocumentRequest(models.Model):
+    """
+    Staff asking an applicant or resident for a document.
+
+    A REQUEST, NOT A GUESS. The applicant-status page used to show a fixed list
+    of documents "needed" from their answers, with an upload button that could
+    never be pressed. What staff actually need varies per application, so they
+    say what they need here and the person uploads it in the portal.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    application = models.ForeignKey(RentalApplication, on_delete=models.CASCADE, related_name="document_requests")
+    kind = models.CharField(max_length=20, choices=DocumentKind.choices)
+    message = models.TextField(blank=True, default="", help_text="Shown to the applicant. Say exactly what you need.")
+    status = models.CharField(
+        max_length=12, choices=DocumentRequestStatus.choices, default=DocumentRequestStatus.REQUESTED, db_index=True,
+    )
+    requested_by = models.ForeignKey("accounts.User", null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
+    due_at = models.DateField(null=True, blank=True)
+    review_note = models.TextField(blank=True, default="", help_text="Shown to the applicant when you ask again.")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "document_requests"
+        ordering = ["-created_at"]
+        constraints = [
+            # "Needs another upload", unexplained, leaves someone guessing what
+            # was wrong with the pay stub they already sent.
+            models.CheckConstraint(
+                condition=~models.Q(status="REJECTED") | ~models.Q(review_note=""),
+                name="rejected_document_request_has_note",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.get_kind_display()} - {self.get_status_display()}"
+
+
+class ApplicationDocument(models.Model):
+    """One uploaded file. Stored privately; see apps/core/private_storage.py."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    application = models.ForeignKey(RentalApplication, on_delete=models.CASCADE, related_name="documents")
+    request = models.ForeignKey(
+        DocumentRequest, null=True, blank=True, on_delete=models.SET_NULL, related_name="documents",
+    )
+    kind = models.CharField(max_length=20, choices=DocumentKind.choices)
+    stored_name = models.CharField(max_length=200)
+    original_name = models.CharField(max_length=200, blank=True, default="")
+    content_type = models.CharField(max_length=100)
+    size = models.PositiveIntegerField()
+    uploaded_by = models.ForeignKey("accounts.User", null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "application_documents"
+        ordering = ["-created_at"]
+
+    def __str__(self) -> str:
+        return self.original_name or self.stored_name

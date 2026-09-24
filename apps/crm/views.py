@@ -63,9 +63,31 @@ from apps.billing.models import PaymentMethodConfig  # noqa: E402
 from apps.billing.serializers import PaymentMethodConfigSerializer  # noqa: E402
 
 
+#: Answers that are written to encrypted columns and then REMOVED from the
+#: draft JSON. `draft_data` is plain JSON, read by the anonymous draft GET, the
+#: admin and every backup; a full SSN or licence number sitting in it is the
+#: single worst thing this database could leak. The form only needs to know
+#: that one is on file, which `ssnLast4` / `hasLicenseOnFile` tell it.
+SENSITIVE_DRAFT_KEYS = ("ssn", "driversLicense", "ein")
+
+
 def _draft_payload(application) -> dict:
     """The shape the application form round-trips, plus the server's own id."""
-    return {**(application.draft_data or {}), "id": str(application.id)}
+    data = {k: v for k, v in (application.draft_data or {}).items() if k not in SENSITIVE_DRAFT_KEYS}
+    return {
+        **data,
+        "id": str(application.id),
+        "ssnLast4": application.ssn_last4 or None,
+        "hasLicenseOnFile": bool(application.drivers_license_number),
+    }
+
+
+def _scrub_sensitive(application, data: dict) -> dict:
+    """Move SSN/licence into their columns (via _sync_columns) and out of the JSON."""
+    ssn_digits = "".join(c for c in str(data.get("ssn") or "") if c.isdigit())
+    if len(ssn_digits) >= 4:
+        application.ssn_last4 = ssn_digits[-4:]
+    return {k: v for k, v in data.items() if k not in SENSITIVE_DRAFT_KEYS}
 
 
 # ---------------------------------------------------------------------------
@@ -111,7 +133,21 @@ _TEXT_COLUMNS = {
     "previousZip": "previous_zip",
 }
 
-_DATE_COLUMNS = {"dateOfBirth": "date_of_birth", "moveInDate": "move_in_date"}
+_TEXT_COLUMNS["idType"] = "id_type"
+_TEXT_COLUMNS["ein"] = "ein"
+
+# `preferredMoveInDate` is what the form sends; `moveInDate` is the older name.
+_DATE_COLUMNS = {
+    "dateOfBirth": "date_of_birth",
+    "moveInDate": "move_in_date",
+    "preferredMoveInDate": "move_in_date",
+}
+
+# Yes/no answers, under the names the form actually uses.
+_BOOL_COLUMNS = {
+    "isActiveMilitary": "is_active_military",
+    "receivesHousingAssistance": "has_housing_assistance",
+}
 
 
 def _as_date(value):
@@ -161,19 +197,29 @@ def _sync_columns(application, data: dict) -> list[str]:
     if isinstance(prev_res, int) and prev_res >= 0:
         put("previous_residence_months", prev_res)
 
-    # Income: the form allows several sources, and what staff need on the record
-    # is the total the applicant is declaring.
-    sources = data.get("incomeSources")
-    if isinstance(sources, list) and sources:
-        total = 0
-        for source in sources:
-            if isinstance(source, dict):
-                try:
-                    total += int(source.get("monthlyAmountCents") or 0)
-                except (TypeError, ValueError):
-                    continue
-        if total:
-            put("gross_monthly_income_cents", total)
+    for key, column in _BOOL_COLUMNS.items():
+        if isinstance(data.get(key), bool):
+            put(column, data[key])
+
+    # HOUSEHOLD income, as declared. The form asks for one total for everyone
+    # moving in and an optional breakdown; the total is what the applicant
+    # stated, so it wins. The breakdown sum is only a fallback for drafts saved
+    # before the total existed. `grossMonthlyCents` is the form's older name.
+    declared = data.get("householdMonthlyIncomeCents", data.get("grossMonthlyCents"))
+    if isinstance(declared, int) and declared > 0:
+        put("gross_monthly_income_cents", declared)
+    else:
+        sources = data.get("incomeSources")
+        if isinstance(sources, list) and sources:
+            total = 0
+            for source in sources:
+                if isinstance(source, dict):
+                    try:
+                        total += int(source.get("monthlyAmountCents") or 0)
+                    except (TypeError, ValueError):
+                        continue
+            if total:
+                put("gross_monthly_income_cents", total)
 
     # Household. `pets` and `occupants` are lists, so their presence is the
     # answer — an empty list means "none", which is different from unanswered.
@@ -187,11 +233,60 @@ def _sync_columns(application, data: dict) -> list[str]:
         minors = [o for o in occupants if isinstance(o, dict) and o.get("isMinor")]
         put("has_kids", bool(minors))
         put("number_of_kids", len(minors))
+    elif isinstance(data.get("hasMinorsOrDependents"), bool):
+        count = data.get("dependentCount") if data["hasMinorsOrDependents"] else 0
+        put("has_kids", data["hasMinorsOrDependents"])
+        put("number_of_kids", count if isinstance(count, int) and count >= 0 else None)
 
-    if isinstance(data.get("hasPriorEviction"), bool):
+    # One column records "any of the three". The form asks them separately and
+    # the separate answers stay in the JSON for the admin to show.
+    answers = [data.get(k) for k in ("hasEviction", "hasFelony", "hasBankruptcy")]
+    if all(isinstance(a, bool) for a in answers):
+        put("has_felony_eviction_bankruptcy", any(answers))
+    elif isinstance(data.get("hasPriorEviction"), bool):
         put("has_felony_eviction_bankruptcy", data["hasPriorEviction"])
 
     return touched
+
+
+def _sync_guarantor(application, data: dict) -> None:
+    """The optional guarantor lives in its own table so the portal can edit it."""
+    from .models import Guarantor
+
+    if "guarantor" not in data:
+        return
+    g = data.get("guarantor")
+    if not isinstance(g, dict) or not str(g.get("fullName") or "").strip():
+        Guarantor.objects.filter(application=application).delete()
+        return
+    income = g.get("monthlyIncomeCents")
+    Guarantor.objects.update_or_create(
+        application=application,
+        defaults={
+            "full_name": str(g.get("fullName")).strip()[:200],
+            "relationship": str(g.get("relationship") or "").strip()[:100],
+            "email": str(g.get("email") or "").strip()[:254],
+            "phone": str(g.get("phone") or "").strip()[:20],
+            "monthly_income_cents": income if isinstance(income, int) and income >= 0 else None,
+        },
+    )
+
+
+def apply_draft_data(application, data: dict) -> list[str]:
+    """
+    Everything a draft save does to the row: columns, guarantor, and the scrub.
+
+    Shared by the PATCH endpoint and `resync_applications`, so re-running the
+    sync over old rows does exactly what a live save would.
+    """
+    # An SSN or ITIN is nine digits. Anything else is a typo, and storing its
+    # last four would tell the form one is on file when it is not.
+    if data.get("ssn") and len("".join(c for c in str(data["ssn"]) if c.isdigit())) != 9:
+        data = {k: v for k, v in data.items() if k != "ssn"}
+    touched = _sync_columns(application, data)
+    _sync_guarantor(application, data)
+    application.draft_data = _scrub_sensitive(application, data)
+    return list(dict.fromkeys(["draft_data", "ssn_last4", *touched]))
 
 
 @api_view(["POST"])
@@ -231,11 +326,18 @@ def draft_detail(request, draft_id):
             status=_http.HTTP_409_CONFLICT,
         )
 
-    data = {**(application.draft_data or {}), **(request.data or {})}
-    data.pop("id", None)
-    application.draft_data = data
+    incoming = dict(request.data or {})
+    # Computed by the server for the form; never written back.
+    for key in ("id", "ssnLast4", "hasLicenseOnFile"):
+        incoming.pop(key, None)
+    # A blank SSN on resave means "unchanged" - the form never holds the old
+    # value to send back, and a blank must not erase the one on file.
+    for key in SENSITIVE_DRAFT_KEYS:
+        if not incoming.get(key):
+            incoming.pop(key, None)
+    data = {**(application.draft_data or {}), **incoming}
 
-    fields = ["draft_data", "updated_at", *_sync_columns(application, data)]
+    fields = [*apply_draft_data(application, data), "updated_at"]
     application.save(update_fields=fields)
     return Response(_draft_payload(application))
 
@@ -274,7 +376,7 @@ def submit_draft(request, draft_id):
             ("Email", application.email),
             ("Phone", application.cell_phone),
             ("Home", application.property if application.property_id else "not specified"),
-            ("Move-in", application.move_in_date or draft.get("moveInDate")),
+            ("Move-in", application.move_in_date or draft.get("preferredMoveInDate")),
             ("Submitted", _timezone.localtime(now).strftime("%a %d %b, %H:%M")),
             ("Payment declared", "yes" if draft.get("paymentReference") else "not yet"),
             ("Open in admin", admin_link(f"crm/rentalapplication/{application.id}/change")),
@@ -572,218 +674,11 @@ def alert_subscription(request):
 
 
 # ===========================================================================
-# Personalized Lease Agreement Endpoints
+# Lease endpoints live in lease.py; re-exported for urls.py.
 # ===========================================================================
 
-from django.shortcuts import get_object_or_404  # noqa: E402
-from datetime import timedelta  # noqa: E402
-
-
-@api_view(["GET"])
-@permission_classes([AllowAny])
-def lease_agreement_detail(request, application_id):
-    """
-    Returns personalized lease agreement data for an application.
-    Accurately binds the actual property address, rent, and deposit from the application.
-    """
-    app = get_object_or_404(
-        RentalApplication.objects.select_related("property", "user"),
-        id=application_id,
-    )
-
-    prop = app.property
-    if not prop and app.draft_data:
-        listing_slug = app.draft_data.get("listingSlug")
-        if listing_slug:
-            from apps.properties.models import Property
-            prop = Property.objects.filter(slug=listing_slug).first()
-            if prop:
-                app.property = prop
-                app.save(update_fields=["property"])
-
-    if not prop:
-        from apps.billing.models import Invoice
-        inv = Invoice.objects.filter(rental_application=app).first()
-        if inv and getattr(inv, "property", None):
-            prop = inv.property
-            app.property = prop
-            app.save(update_fields=["property"])
-
-    if not prop:
-        from apps.properties.models import Property
-        prop = Property.objects.filter(slug__icontains="academy").first() or Property.objects.first()
-
-    if prop:
-        state_code = prop.state or "TX"
-        state_name = f"State of {state_code}"
-        full_address = f"{prop.address}, {prop.city}, {prop.state} {prop.zip_code}".strip(", ")
-        bedrooms = f"{prop.bedrooms} ({prop.bedrooms})" if prop.bedrooms else "three (3)"
-        bathrooms = f"{prop.bathrooms} ({prop.bathrooms})" if prop.bathrooms else "two (2)"
-        parking = "two (2)"
-        monthly_rent_cents = prop.price_cents or 159600
-    else:
-        state_name = "State of Texas"
-        full_address = "745 Academy Ln, Deer Park, TX 77536"
-        bedrooms = "three (3)"
-        bathrooms = "two (2)"
-        parking = "two (2)"
-        monthly_rent_cents = 159600
-
-    monthly_rent = f"${monthly_rent_cents / 100:,.2f}"
-    annual_rent = f"${(monthly_rent_cents * 12) / 100:,.2f}"
-
-    deposit_cents = app.security_deposit_cents or monthly_rent_cents
-    deposit_formatted = f"${deposit_cents / 100:,.2f}"
-
-    pet_deposit_cents = app.pet_fee_cents or 0
-    pet_deposit_formatted = f"${pet_deposit_cents / 100:,.2f}"
-
-    # Dates
-    start_date_obj = app.move_in_date or _timezone.now().date()
-    end_date_obj = start_date_obj + timedelta(days=364)
-    start_date_str = start_date_obj.strftime("%B %d, %Y")
-    end_date_str = end_date_obj.strftime("%B %d, %Y")
-    agreement_date_str = (app.lease_sent_at or _timezone.now()).strftime("%B %d, %Y")
-
-    tenant_name = (
-        f"{app.first_name} {app.last_name}".strip()
-        or (app.user.get_full_name() if app.user and hasattr(app.user, "get_full_name") else "")
-        or "Resident"
-    )
-    tenant_email = app.email or (app.user.email if app.user else "resident@example.com")
-    tenant_phone = app.cell_phone or (getattr(app.user, "phone", "") if app.user else "")
-    tenant_address = app.present_address or full_address
-
-    # Landlord configuration (customized per house or defaults)
-    landlord_name = app.landlord_name or "Kenneth Hensley Jr"
-    landlord_company = app.landlord_company or "Skelton Realty Group"
-    landlord_address = app.landlord_address or "213 Bob Ln, Virginia Beach, VA 23454"
-    landlord_email = app.landlord_email or "kenneth@skeltonrealtygroup.com"
-    landlord_phone = app.landlord_phone or "(800) 555-0198"
-
-    return Response({
-        "application_id": str(app.id),
-        "status": app.status,
-        "is_signed": bool(app.lease_signed_at),
-        "signed_at": app.lease_signed_at.strftime("%B %d, %Y at %I:%M %p") if app.lease_signed_at else None,
-        "signature_url": app.lease_signature_url or None,
-        "occupants": app.lease_occupants or "",
-        "vehicles": app.lease_vehicles or "",
-        "emergency_contact": app.lease_emergency_contact or "",
-        "tenant": {
-            "name": tenant_name,
-            "email": tenant_email,
-            "phone": tenant_phone,
-            "address": tenant_address,
-        },
-        "landlord": {
-            "name": landlord_name,
-            "company": landlord_company,
-            "address": landlord_address,
-            "email": landlord_email,
-            "phone": landlord_phone,
-        },
-        "property": {
-            "id": str(prop.id) if prop else None,
-            "title": prop.title if prop else None,
-            "address": prop.address if prop else "745 Academy Ln",
-            "city": prop.city if prop else "Deer Park",
-            "state": prop.state if prop else "TX",
-            "zip_code": prop.zip_code if prop else "77536",
-            "full_address": full_address,
-            "bedrooms": bedrooms,
-            "bathrooms": bathrooms,
-            "parking_spaces": parking,
-        },
-        "financials": {
-            "monthly_rent": monthly_rent,
-            "annual_rent": annual_rent,
-            "security_deposit": deposit_formatted,
-            "pet_deposit": pet_deposit_formatted,
-            "rent_due_day": "5th",
-        },
-        "dates": {
-            "state_name": state_name,
-            "agreement_date": agreement_date_str,
-            "term_start_date": start_date_str,
-            "term_end_date": end_date_str,
-        },
-    })
-
-
-@api_view(["GET"])
-@permission_classes([AllowAny])
-def lease_agreement_latest(request):
-    """
-    Returns personalized lease agreement data for the authenticated resident's latest
-    application, or the most recent active application.
-    """
-    app = None
-    if request.user and request.user.is_authenticated:
-        if request.user.email:
-            RentalApplication.objects.filter(
-                user__isnull=True,
-                email__iexact=request.user.email.strip(),
-            ).update(user=request.user)
-
-        app = RentalApplication.objects.filter(
-            Q(user=request.user) | (Q(email__iexact=request.user.email) if request.user.email else Q())
-        ).select_related("property", "user").order_by("-created_at").first()
-
-    if not app:
-        app = (
-            RentalApplication.objects.select_related("property", "user")
-            .filter(property__isnull=False)
-            .order_by("-created_at")
-            .first()
-        )
-
-    if app:
-        return lease_agreement_detail(request._request, app.id)
-
-    return Response({"detail": "No active lease agreement found."}, status=_http.HTTP_404_NOT_FOUND)
-
-
-@api_view(["POST"])
-@permission_classes([AllowAny])
-def sign_lease_agreement(request, application_id):
-    """
-    Submits electronic signature and tenant questionnaire answers.
-    Persists to database and timestamps the signed agreement.
-    """
-    app = get_object_or_404(RentalApplication, id=application_id)
-    data = request.data or {}
-
-    signature_url = data.get("signature_url") or ""
-    signer_name = (data.get("signer_name") or "").strip()
-
-    if not signature_url or not signer_name:
-        return Response(
-            {"detail": "A valid signature and signer name are required."},
-            status=_http.HTTP_400_BAD_REQUEST,
-        )
-
-    now = _timezone.now()
-    app.lease_signature_url = signature_url
-    app.lease_signed_at = now
-
-    if "occupants" in data:
-        app.lease_occupants = str(data["occupants"]).strip()
-    if "vehicles" in data:
-        app.lease_vehicles = str(data["vehicles"]).strip()
-    if "emergency_contact" in data:
-        app.lease_emergency_contact = str(data["emergency_contact"]).strip()
-
-    app.save(update_fields=[
-        "lease_signature_url", "lease_signed_at",
-        "lease_occupants", "lease_vehicles", "lease_emergency_contact", "updated_at",
-    ])
-
-    return Response({
-        "status": "signed",
-        "signed_at": now.strftime("%B %d, %Y at %I:%M %p"),
-        "signer_name": signer_name,
-        "application_id": str(app.id),
-    })
-
-
+from .lease import (  # noqa: E402,F401
+    lease_agreement_detail,
+    lease_agreement_latest,
+    sign_lease_agreement,
+)

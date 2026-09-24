@@ -1,6 +1,6 @@
 from django.urls import path
 
-from . import views
+from . import views, views_admin
 
 urlpatterns = [
     path("apply/my-applications/", views.my_applications, name="my-applications"),
@@ -19,4 +19,9 @@ urlpatterns = [
     path("lease/latest/", views.lease_agreement_latest, name="lease-agreement-latest"),
     path("lease/<uuid:application_id>/", views.lease_agreement_detail, name="lease-agreement-detail"),
     path("lease/<uuid:application_id>/sign/", views.sign_lease_agreement, name="sign-lease-agreement"),
+    path(
+        "admin/document/<uuid:document_id>/",
+        views_admin.secure_application_document,
+        name="secure-application-document",
+    ),
 ]

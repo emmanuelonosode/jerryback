@@ -340,6 +340,8 @@ REST_FRAMEWORK = {
         "telemetry": "600/min",
         # A person books one or two tours, not twenty.
         "tour": "10/hour",
+        # Documents sent to staff from the portal.
+        "upload": "30/hour",
     },
 }
 
@@ -418,6 +420,22 @@ COMPANY_PHONE_HOURS = env("COMPANY_PHONE_HOURS", default="")
 COMPANY_EMAIL = env("COMPANY_EMAIL", default="")
 COMPANY_ADDRESS = env("COMPANY_ADDRESS", default="")
 
+# Lease terms. Set by the business; the defaults are the tenant-favourable
+# terms agreed for the web lease (see apps/crm/lease.py). The late fee is the
+# lesser of the cap and the percentage, which keeps it under every state limit
+# in the catalogue.
+LEASE_RENT_DUE_DAY = env.int("LEASE_RENT_DUE_DAY", default=1)
+LEASE_LATE_AFTER_DAYS = env.int("LEASE_LATE_AFTER_DAYS", default=5)
+LEASE_LATE_FEE_CAP_CENTS = env.int("LEASE_LATE_FEE_CAP_CENTS", default=5000)
+LEASE_LATE_FEE_BASIS_POINTS = env.int("LEASE_LATE_FEE_BASIS_POINTS", default=500)
+LEASE_RETURNED_PAYMENT_FEE_CENTS = env.int("LEASE_RETURNED_PAYMENT_FEE_CENTS", default=2500)
+LEASE_DEPOSIT_RETURN_DAYS = env.int("LEASE_DEPOSIT_RETURN_DAYS", default=14)
+LEASE_ENTRY_NOTICE_HOURS = env.int("LEASE_ENTRY_NOTICE_HOURS", default=48)
+# A number answered 24 hours a day for emergencies (a burst pipe, no heat).
+# Texas requires one on the lease (Prop. Code 92.020); every lease prints it
+# when set, and a Texas lease cannot be sent without it.
+LEASE_EMERGENCY_PHONE = env("LEASE_EMERGENCY_PHONE", default="")
+
 DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="Skelton Realty Group <no-reply@skeltonrealtygroup.com>")
 EMAIL_BACKEND = env("EMAIL_BACKEND", default="django.core.mail.backends.console.EmailBackend")
 EMAIL_HOST = env("EMAIL_HOST", default="")
@@ -446,7 +464,18 @@ MOVE_IN_LEASE_ADMIN_FEE_CENTS = env.int("MOVE_IN_LEASE_ADMIN_FEE_CENTS", default
 # clamping to a cap that may not apply in that jurisdiction is its own error.
 # An empty table means "no ceiling configured", and the move-in breakdown says
 # so rather than implying the figure has been checked.
-SECURITY_DEPOSIT_MAX_MONTHS: dict[str, float] = {}
+#
+# Filled from the statutes for the states the catalogue lists (researched
+# September 2026; see documents/lease-legal-review.md). A state not listed has
+# no general statutory cap. California's small-landlord exception (two months)
+# is deliberately not used: the homes are owned by companies.
+SECURITY_DEPOSIT_MAX_MONTHS: dict[str, float] = {
+    "AZ": 1.5,  # A.R.S. 33-1321(A)
+    "CA": 1,    # Civ. Code 1950.5(c), as amended by AB 12, from 1 July 2024
+    "GA": 2,    # O.C.G.A. 44-7-30, Safe at Home Act (HB 404), from 1 July 2024
+    "NC": 2,    # N.C.G.S. 42-51, tenancies longer than month to month
+    "NV": 3,    # NRS 118A.242
+}
 SECURITY_DEPOSIT_MAX_MONTHS_DEFAULT: float | None = None
 
 APPLICATION_FEE_CENTS = env.int("APPLICATION_FEE_CENTS", default=5500)
