@@ -27,6 +27,9 @@ class TourStatus(models.TextChoices):
     PENDING_REVIEW = "PENDING_REVIEW", "Pending review"
     APPROVED = "APPROVED", "Approved"
     REJECTED = "REJECTED", "Rejected"
+    # Called off by the person who booked it. Kept apart from REJECTED, which
+    # is a staff decision, so the queue does not read as us turning people away.
+    CANCELLED = "CANCELLED", "Cancelled"
 
 
 class TourRequest(models.Model):
@@ -68,7 +71,7 @@ class TourRequest(models.Model):
         """Reviewed requests whose documents have served their purpose."""
         cutoff = timezone.now() - timedelta(hours=older_than_hours)
         return cls.objects.filter(
-            status__in=[TourStatus.APPROVED, TourStatus.REJECTED],
+            status__in=[TourStatus.APPROVED, TourStatus.REJECTED, TourStatus.CANCELLED],
             reviewed_at__isnull=False, reviewed_at__lt=cutoff, id_purged_at__isnull=True,
         ).exclude(id_front_url="", id_back_url="")
 

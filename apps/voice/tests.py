@@ -1,5 +1,7 @@
 import json
 from datetime import timedelta
+from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
 from django.test import TestCase, override_settings
 from django.utils import timezone
@@ -8,14 +10,26 @@ from apps.core.money import dollars
 from apps.crm.models import ApplicationStatus, Lead, LeadSource, RentalApplication
 from apps.properties.models import PropertyStatus
 from apps.properties.tests import make_property
-from apps.scheduler.models import TourRequest, TourStatus
+from apps.integrations.models import OutboundEmail
+from apps.scheduler.models import TourRequest, TourStatus, Viewing, ViewingStatus
 
 TOKEN = "test-voice-token"
 URL = "/api/v1/voice/mcp"
 
 
+def days(n):
+    return (timezone.localdate() + timedelta(days=n)).isoformat()
+
+
 @override_settings(VOICE_MCP_TOKEN=TOKEN)
 class McpTestCase(TestCase):
+    def setUp(self):
+        # Staff alerts send on a thread, which fights the test database for
+        # its lock. What is queued is asserted on; the send itself is not.
+        patcher = patch("apps.integrations.alerts.deliver_in_background")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def rpc(self, method, params=None, msg_id=1, token=TOKEN):
         body = {"jsonrpc": "2.0", "id": msg_id, "method": method}
         if params is not None:
@@ -47,8 +61,9 @@ class ProtocolTests(McpTestCase):
 
         names = {t["name"] for t in self.rpc("tools/list").json()["result"]["tools"]}
         self.assertEqual(names, {
-            "search_homes", "get_home_details", "book_tour", "save_caller_details",
-            "check_application_status", "get_leasing_policies",
+            "search_homes", "get_home_details", "find_tour_times", "book_tour", "check_my_tours",
+            "reschedule_tour", "cancel_tour", "save_caller_details", "check_application_status",
+            "get_leasing_policies",
         })
 
     def test_notifications_get_202_and_no_body(self):
@@ -90,31 +105,126 @@ class HomeToolTests(McpTestCase):
         self.assertTrue(err)
 
 
+@patch("apps.voice.tools.deliver_in_background")
 class BookTourTests(McpTestCase):
-    def test_books_a_request_that_a_person_confirms(self):
+    def test_an_in_person_tour_is_a_request_a_person_confirms(self, _deliver):
         home = make_property()
-        tomorrow = (timezone.localdate() + timedelta(days=1)).isoformat()
         data, err = self.call(
-            "book_tour", home_slug=home.slug, full_name="Ada Lovelace",
-            phone="(704) 555-0100", preferred_date=tomorrow, preferred_time="morning",
+            "book_tour", home_slug=home.slug, tour_type="in-person", full_name="Ada Lovelace",
+            phone="(704) 555-0100", preferred_date=days(1), preferred_time="morning",
         )
         self.assertFalse(err)
         tour = TourRequest.objects.get()
         self.assertEqual(tour.status, TourStatus.PENDING_REVIEW)
-        self.assertEqual(tour.property, home)
+        self.assertIsNone(tour.viewing)
         self.assertEqual(tour.lead.source, LeadSource.PHONE_AGENT)
         self.assertIn("not yet confirmed", data["tell_the_caller"])
 
-    def test_a_past_date_or_short_phone_is_refused(self):
+    def test_a_past_date_or_short_phone_is_refused(self, _deliver):
         home = make_property()
-        yesterday = (timezone.localdate() - timedelta(days=1)).isoformat()
-        _, err = self.call("book_tour", home_slug=home.slug, full_name="A", phone="7045550100",
-                           preferred_date=yesterday)
+        _, err = self.call("book_tour", home_slug=home.slug, tour_type="in-person", full_name="A",
+                           phone="7045550100", preferred_date=days(-1))
         self.assertTrue(err)
-        _, err = self.call("book_tour", home_slug=home.slug, full_name="A", phone="555",
-                           preferred_date=timezone.localdate().isoformat())
+        _, err = self.call("book_tour", home_slug=home.slug, tour_type="in-person", full_name="A",
+                           phone="555", preferred_date=days(1))
         self.assertTrue(err)
         self.assertFalse(TourRequest.objects.exists())
+
+
+@patch("apps.voice.tools.deliver_in_background")
+class SelfTourTests(McpTestCase):
+    def book(self, home, when="10:00", **over):
+        return self.call("book_tour", **{
+            "home_slug": home.slug, "tour_type": "self-tour", "full_name": "Ada Lovelace",
+            "phone": "704-555-0100", "email": "ada@example.com", "preferred_date": days(3),
+            "time": when, **over,
+        })
+
+    def test_times_are_offered_in_the_homes_own_timezone(self, _deliver):
+        home = make_property(state="AZ", allow_selfshow=True)
+        data, _ = self.call("find_tour_times", home_slug=home.slug, date=days(3))
+        self.assertEqual(data["timezone"], "America/Phoenix")
+        self.assertEqual(data["open_times"][0], {"time": "09:00", "say": "9:00 AM"})
+
+        self.book(home, when="09:00")
+        viewing = Viewing.objects.get()
+        # 9am in Phoenix, which keeps no daylight saving, is always 16:00 UTC.
+        self.assertEqual(viewing.scheduled_at.astimezone(ZoneInfo("UTC")).hour, 16)
+
+    def test_a_booked_slot_is_held_and_cannot_be_double_booked(self, _deliver):
+        home = make_property(allow_selfshow=True)
+        data, err = self.book(home)
+        self.assertFalse(err)
+        self.assertEqual(data["status"], "booked")
+        tour = TourRequest.objects.get()
+        self.assertEqual(tour.viewing.status, ViewingStatus.SCHEDULED)
+
+        _, err = self.book(home, phone="7045550199")
+        self.assertTrue(err)
+        times = [t["time"] for t in self.call("find_tour_times", home_slug=home.slug, date=days(3))[0]["open_times"]]
+        self.assertNotIn("10:00", times)
+        # Back-to-back is fine; overlapping is not.
+        self.assertIn("09:30", times)
+        self.assertIn("10:30", times)
+
+    def test_the_caller_is_emailed_an_id_link_and_never_given_a_code(self, _deliver):
+        home = make_property(allow_selfshow=True)
+        data, _ = self.book(home)
+        tour = TourRequest.objects.get()
+        mail = OutboundEmail.objects.get(to_email="ada@example.com")
+        self.assertIn(f"/tour-id/{tour.public_id}", mail.body_text)
+        self.assertNotIn("code is", data["tell_the_caller"].lower().replace("door code", ""))
+
+    def test_a_home_not_set_up_for_self_showing_is_refused(self, _deliver):
+        home = make_property(allow_selfshow=False)
+        _, err = self.book(home)
+        self.assertTrue(err)
+        data, _ = self.call("find_tour_times", home_slug=home.slug, date=days(3))
+        self.assertFalse(data["self_tour_available"])
+
+    def test_looking_up_a_tour_needs_a_second_factor_and_hides_the_code(self, _deliver):
+        home = make_property(allow_selfshow=True)
+        self.book(home)
+        Viewing.objects.update(access_code="123456")
+
+        _, err = self.call("check_my_tours", phone="7045550100")
+        self.assertTrue(err)
+        data, _ = self.call("check_my_tours", phone="7045550100", last_name="Byron")
+        self.assertEqual(data["tours"], [])
+        data, _ = self.call("check_my_tours", phone="+1 704 555 0100", last_name="lovelace")
+        self.assertEqual(len(data["tours"]), 1)
+        self.assertNotIn("123456", json.dumps(data))
+
+    def test_reschedule_moves_the_slot_and_voids_the_old_code(self, _deliver):
+        home = make_property(allow_selfshow=True)
+        booked, _ = self.book(home)
+        Viewing.objects.update(access_code="123456")
+
+        data, err = self.call("reschedule_tour", phone="7045550100", reference=booked["reference"],
+                              new_date=days(4), new_time="15:00")
+        self.assertFalse(err)
+        viewing = Viewing.objects.get()
+        self.assertEqual(viewing.access_code, "")
+        self.assertEqual(viewing.scheduled_at.astimezone(ZoneInfo("America/New_York")).hour, 15)
+        # The old slot is free again.
+        times = [t["time"] for t in self.call("find_tour_times", home_slug=home.slug, date=days(3))[0]["open_times"]]
+        self.assertIn("10:00", times)
+
+    def test_cancel_frees_the_slot_and_starts_the_id_purge_clock(self, _deliver):
+        home = make_property(allow_selfshow=True)
+        self.book(home)
+        TourRequest.objects.update(id_front_url="front.jpg")
+
+        _, err = self.call("cancel_tour", phone="7045550100", email="ada@example.com")
+        self.assertFalse(err)
+        tour = TourRequest.objects.get()
+        self.assertEqual(tour.status, TourStatus.CANCELLED)
+        self.assertEqual(tour.viewing.status, ViewingStatus.CANCELLED)
+        TourRequest.objects.update(reviewed_at=timezone.now() - timedelta(hours=25))
+        self.assertIn(tour, TourRequest.ready_to_purge())
+        # And a cancelled tour no longer shows up as theirs.
+        data, _ = self.call("check_my_tours", phone="7045550100", email="ada@example.com")
+        self.assertEqual(data["tours"], [])
 
 
 class CallerTests(McpTestCase):

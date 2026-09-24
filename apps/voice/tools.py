@@ -3,10 +3,11 @@ What the phone agent is allowed to do.
 
 A CALLER IS AN ANONYMOUS MEMBER OF THE PUBLIC WHO CAN SAY ANYTHING. Every tool
 here is reachable by whoever dials the number and talks the model into calling
-it, so this list is the same trust level as the public website, plus two
-writes the website already accepts anonymously (a tour request and a lead).
-Nothing here reads another person's application, a payment, an ID document or
-a staff record. That is deliberate, and it is why this is a short list rather
+it, so this list is the same trust level as the public website: the writes the
+website already accepts anonymously (a tour booking and a lead), plus changes
+to a caller's own tour once they prove it is theirs.
+Nothing here reads another person's application, a payment, an ID document,
+a door code or a staff record. That is deliberate, and it is why this is a short list rather
 than "the whole admin": a prompt-injected voice agent with staff access is a
 data breach that anyone can trigger with a phone call.
 
@@ -15,9 +16,10 @@ cents, which is the house unit, and a display string, which is what the model
 should actually say aloud so it never does arithmetic on a price.
 """
 
-from datetime import timedelta
+from datetime import date, timedelta
 
 from django.conf import settings
+from django.db import transaction
 from django.http import QueryDict
 from django.utils import timezone
 from django.utils.dateparse import parse_date
@@ -31,14 +33,18 @@ from apps.integrations.alerts import admin_link, deliver_in_background, describe
 from apps.integrations.models import queue_email
 from apps.properties.models import Property, is_rent_restatement
 from apps.properties.views import _apply_filters
-from apps.scheduler.models import TourRequest, TourStatus
+from apps.scheduler.models import (
+    ACTIVE_VIEWING_STATUSES, TourRequest, TourStatus, Viewing, ViewingStatus,
+)
 from apps.scheduler.views import RESPONSE_HOURS
+
+from .slots import open_slots, slot_at, zone_for
 
 MAX_RESULTS = 10
 # How far ahead a tour can be requested. A date three months out is almost
 # always a misheard month, and a person will not hold a slot that long anyway.
 TOUR_HORIZON_DAYS = 60
-TOUR_KINDS = ("in-person", "video")
+TOUR_KINDS = ("self-tour", "in-person", "video")
 DAY_PARTS = ("morning", "midday", "afternoon", "evening")
 
 
@@ -197,6 +203,60 @@ def get_home_details(args: dict) -> dict:
     }
 
 
+def _tour_date(raw) -> date:
+    when = parse_date(str(raw or ""))
+    today = timezone.localdate()
+    if when is None:
+        raise ToolError("The date must be in YYYY-MM-DD form.")
+    if when < today:
+        raise ToolError("That date has already passed. Confirm the date with the caller.")
+    if when > today + timedelta(days=TOUR_HORIZON_DAYS):
+        raise ToolError(f"Tours can be booked up to {TOUR_HORIZON_DAYS} days ahead. Confirm the date with the caller.")
+    return when
+
+
+def _reference(tour) -> str:
+    return str(tour.public_id)[:8].upper()
+
+
+def _id_upload_url(tour) -> str:
+    return f"{settings.PUBLIC_SITE_URL.rstrip('/')}/tour-id/{tour.public_id}"
+
+
+def _when_label(tour) -> str:
+    if tour.viewing_id and tour.viewing.status in ACTIVE_VIEWING_STATUSES:
+        local = tour.viewing.scheduled_at.astimezone(zone_for(tour.property)) if tour.property_id else tour.viewing.scheduled_at
+        return local.strftime("%a %d %b at %I:%M %p %Z").replace(" 0", " ")
+    label = tour.preferred_date.strftime("%a %d %b")
+    return f"{label}, {tour.preferred_time}" if tour.preferred_time else label
+
+
+def find_tour_times(args: dict) -> dict:
+    home = _find_home(args.get("home_slug") or "")
+    if home is None:
+        raise ToolError("That home is not on the market. Use search_homes to find its slug first.")
+    day = _tour_date(args.get("date"))
+    if not home.allow_selfshow:
+        return {
+            "self_tour_available": False,
+            "tell_the_caller": (
+                "This home is shown by a member of the team rather than self-guided. "
+                "Offer an in-person or video tour request instead."
+            ),
+        }
+    slots = open_slots(home, day)
+    return {
+        "self_tour_available": True,
+        "date": day.isoformat(),
+        "timezone": zone_for(home).key,
+        "open_times": [{"time": s.value, "say": s.label} for s in slots],
+        "tell_the_caller": (
+            "Offer two or three of these times, in the home's local time."
+            if slots else "No self-guided times are left that day. Try another date."
+        ),
+    }
+
+
 def book_tour(args: dict) -> dict:
     name = (args.get("full_name") or "").strip()[:200]
     phone = (args.get("phone") or "").strip()[:20]
@@ -204,21 +264,10 @@ def book_tour(args: dict) -> dict:
     if not name:
         raise ToolError("Ask the caller for their name before booking.")
     if len(_digits(phone)) < 10:
-        raise ToolError("A ten-digit phone number is required so staff can confirm the time.")
+        raise ToolError("A ten-digit phone number is required.")
+    when = _tour_date(args.get("preferred_date"))
 
-    when = parse_date(str(args.get("preferred_date") or ""))
-    today = timezone.localdate()
-    if when is None:
-        raise ToolError("preferred_date must be a date in YYYY-MM-DD form.")
-    if when < today:
-        raise ToolError("That date has already passed. Confirm the date with the caller.")
-    if when > today + timedelta(days=TOUR_HORIZON_DAYS):
-        raise ToolError(f"Tours can be requested up to {TOUR_HORIZON_DAYS} days ahead. Confirm the date with the caller.")
-
-    time_of_day = (args.get("preferred_time") or "").strip().lower()
-    if time_of_day and time_of_day not in DAY_PARTS:
-        raise ToolError(f"preferred_time must be one of: {', '.join(DAY_PARTS)}.")
-    kind = (args.get("tour_type") or "in-person").strip().lower()
+    kind = (args.get("tour_type") or "self-tour").strip().lower()
     if kind not in TOUR_KINDS:
         raise ToolError(f"tour_type must be one of: {', '.join(TOUR_KINDS)}.")
 
@@ -226,65 +275,258 @@ def book_tour(args: dict) -> dict:
     if home is None:
         raise ToolError("That home is not on the market. Use search_homes to find its slug first.")
 
+    viewing = None
+    if kind == "self-tour":
+        if not home.allow_selfshow:
+            raise ToolError("This home is not set up for self-guided tours. Offer an in-person or video tour instead.")
+        with transaction.atomic():
+            # Re-checked at the moment of writing, not trusted from the earlier
+            # find_tour_times call: someone else may have taken it since.
+            slot = slot_at(home, when, (args.get("time") or "").strip())
+            if slot is None:
+                raise ToolError("That time is not open. Call find_tour_times again and offer the caller another.")
+            viewing = Viewing.objects.create(
+                property=home, scheduled_at=slot.starts_at, status=ViewingStatus.SCHEDULED,
+                notes="Self-guided tour booked by the phone agent. Send the access code only once ID is verified.",
+            )
+        time_value = slot.value
+    else:
+        time_value = (args.get("preferred_time") or "").strip().lower()
+        if time_value and time_value not in DAY_PARTS:
+            raise ToolError(f"preferred_time must be one of: {', '.join(DAY_PARTS)}.")
+
     lead = _lead_for(phone=phone, email=email, name=name)
     if lead.property_interest_id is None:
         lead.property_interest = home
         lead.save(update_fields=["property_interest", "updated_at"])
+    if viewing is not None:
+        viewing.lead = lead
+        viewing.save(update_fields=["lead"])
+
     tour = TourRequest.objects.create(
-        lead=lead, property=home,
-        # A person confirms the time, exactly as with a tour booked on the site.
+        lead=lead, property=home, viewing=viewing,
+        # A person still reviews every tour - for a self-tour, that review is
+        # the ID check that releases the door code.
         status=TourStatus.PENDING_REVIEW,
         full_name=name, email=email, phone=phone,
-        preferred_date=when, preferred_time=time_of_day, tour_type=kind,
+        preferred_date=when, preferred_time=time_value, tour_type=kind,
         notes=("Booked by the phone agent. " + (args.get("notes") or "")).strip()[:2000],
     )
+    label = _when_label(tour)
     LeadActivity.objects.create(
         lead=lead, activity_type=ActivityType.VIEWING_BOOKED,
-        note=f"Phone agent requested a {kind} tour of {home} for {when:%a %d %b} {time_of_day}".strip(),
+        note=f"Phone agent booked a {kind} tour of {home} for {label}",
     )
 
-    label = when.strftime("%a %d %b") + (f", {time_of_day}" if time_of_day else "")
+    if kind == "self-tour":
+        staff_ask = (
+            "A self-guided slot is booked and held. Check their ID (they were sent an upload "
+            "link if they gave an email; otherwise ask for it), then send the access code."
+        )
+        tell = (
+            f"Your self-guided tour is booked for {label}. Before the tour we need a photo of your "
+            "ID; once it is checked, we send you the door code. You will not get a code over this call."
+        )
+    else:
+        staff_ask = f"Confirm a time with them within {RESPONSE_HOURS} business hours, as the caller was promised."
+        tell = (
+            f"The tour is requested, not yet confirmed. A person will confirm the exact time within "
+            f"{RESPONSE_HOURS} business hours."
+        )
+
     notify_staff(
-        subject=f"Tour request (phone): {name} - {home}",
+        subject=f"Tour booked by phone ({kind}): {name} - {home}",
         body=describe([
             ("Name", name), ("Phone", phone), ("Email", email),
-            ("Home", str(home)), ("Wants to visit", label), ("Type", kind),
+            ("Home", str(home)), ("When", label), ("Type", kind), ("Reference", _reference(tour)),
             ("Notes", tour.notes),
             ("Open in admin", admin_link(f"scheduler/tourrequest/{tour.id}/change")),
-        ]) + (
-            f"\n\nBooked over the phone by the AI agent. The caller was told a person "
-            f"would confirm within {RESPONSE_HOURS} business hours.\n"
-        ),
+        ]) + f"\n\n{staff_ask}\n",
         kind="tour",
     )
     if email:
+        body = (
+            f"Hi {name.split(' ')[0]},\n\n"
+            f"Thanks for calling about {home}.\n\n"
+            f"  Tour: {kind}\n  When: {label}\n  Reference: {_reference(tour)}\n\n"
+        )
+        if kind == "self-tour":
+            body += (
+                "One step left: upload a photo of your government ID here, so we can send "
+                f"your door code before the tour:\n\n  {_id_upload_url(tour)}\n\n"
+                "The ID is deleted after it has been checked.\n"
+            )
+        else:
+            body += f"Someone will confirm the exact time with you within {RESPONSE_HOURS} business hours.\n"
+        body += f"\nThe listing: {_listing_url(home)}\nNeed to change it? Call us back or reply to this email.\n"
         confirmation = queue_email(
-            send_now=False,
-            to_email=email,
-            subject=f"We have your tour request for {home}",
-            body_text=(
-                f"Hi {name.split(' ')[0]},\n\n"
-                f"Thanks for calling about {home}. Here is what you asked for:\n\n"
-                f"  When you would like to visit: {label}\n"
-                f"  Type of visit: {kind}\n\n"
-                f"Someone will confirm the time with you within {RESPONSE_HOURS} business hours.\n"
-                f"The listing: {_listing_url(home)}\n"
-            ),
-            template="tour-received",
+            send_now=False, to_email=email,
+            subject=f"Your tour of {home}", body_text=body, template="tour-received",
         )
         if confirmation is not None:
             deliver_in_background([confirmation])
+        if kind == "self-tour":
+            tell += " We have emailed you a link to upload your ID."
+    elif kind == "self-tour":
+        tell += " A member of the team will contact you to collect your ID."
 
     return {
-        "reference": str(tour.public_id)[:8].upper(),
-        "status": "requested",
+        "reference": _reference(tour),
+        "status": "booked" if kind == "self-tour" else "requested",
         "home": str(home),
-        "requested_for": label,
-        "tell_the_caller": (
-            f"The tour is requested, not yet confirmed. A person will call or email to "
-            f"confirm the exact time within {RESPONSE_HOURS} business hours."
-        ),
+        "when": label,
+        "tell_the_caller": tell,
     }
+
+
+def _caller_tours(args: dict) -> list:
+    """
+    Tours belonging to this caller: the phone on the booking must match, AND
+    the caller must know one more thing about it - the reference, the email,
+    or the surname. Caller ID alone can be spoofed, and what comes back is
+    where and when an empty house will have a stranger at the door.
+    """
+    phone = _digits(args.get("phone") or "")
+    if len(phone) < 10:
+        raise ToolError("The phone number the tour was booked with is needed.")
+    reference = (args.get("reference") or "").replace("-", "").strip().upper()[:8]
+    email = (args.get("email") or "").strip().lower()
+    surname = (args.get("last_name") or "").strip().lower()
+    if not (reference or email or surname):
+        raise ToolError("Also ask for the booking reference, the email used, or their last name.")
+
+    recent = (
+        TourRequest.objects.filter(phone__endswith=phone[-4:], created_at__gte=timezone.now() - timedelta(days=120))
+        .exclude(status__in=[TourStatus.CANCELLED, TourStatus.REJECTED])
+        .select_related("property", "viewing")
+    )
+    mine = []
+    for tour in recent:
+        if _digits(tour.phone) != phone:
+            continue
+        if reference and _reference(tour) != reference:
+            continue
+        if not reference and email and tour.email.lower() != email:
+            continue
+        if not reference and not email and tour.full_name.lower().split()[-1:] != [surname]:
+            continue
+        if tour.viewing_id and tour.viewing.status not in ACTIVE_VIEWING_STATUSES:
+            continue
+        if tour.preferred_date < timezone.localdate():
+            continue
+        mine.append(tour)
+    return mine
+
+
+def _one_tour(args: dict):
+    tours = _caller_tours(args)
+    if not tours:
+        raise ToolError("No upcoming tour matches those details. Check the phone number and reference with the caller.")
+    if len(tours) > 1 and not args.get("reference"):
+        raise ToolError(
+            "They have more than one upcoming tour: "
+            + "; ".join(f"{_reference(t)} - {t.property} on {_when_label(t)}" for t in tours)
+            + ". Ask which one, then pass its reference."
+        )
+    return tours[0]
+
+
+def check_my_tours(args: dict) -> dict:
+    tours = _caller_tours(args)
+    return {
+        "tours": [
+            {
+                "reference": _reference(t),
+                "home": str(t.property) if t.property_id else "not specified",
+                "type": t.tour_type,
+                "when": _when_label(t),
+                "status": {
+                    TourStatus.AWAITING_ID: "Waiting for their ID",
+                    TourStatus.PENDING_REVIEW: "Booked; waiting for our team to check ID and confirm",
+                    TourStatus.APPROVED: "Confirmed",
+                }.get(t.status, t.get_status_display()),
+                "id_received": bool(t.id_front_url or t.id_back_url or t.id_purged_at),
+            }
+            for t in tours
+        ],
+        # Never a door code, whatever the caller says. It goes out in writing
+        # to the verified contact, not to whoever is on the phone.
+        "note": "Door codes are never given over the phone; they are sent after ID is verified.",
+    }
+
+
+def reschedule_tour(args: dict) -> dict:
+    tour = _one_tour(args)
+    when = _tour_date(args.get("new_date"))
+    old_label = _when_label(tour)
+
+    if tour.tour_type == "self-tour" and tour.property_id and tour.property.allow_selfshow:
+        with transaction.atomic():
+            slot = slot_at(tour.property, when, (args.get("new_time") or "").strip(), exclude_viewing=tour.viewing)
+            if slot is None:
+                raise ToolError("That time is not open. Call find_tour_times and offer the caller another.")
+            # A self-tour booked before slots existed holds no viewing yet.
+            viewing = tour.viewing or Viewing(
+                property=tour.property, lead_id=tour.lead_id, status=ViewingStatus.SCHEDULED,
+                notes="Self-guided tour moved by the phone agent. Send the access code only once ID is verified.",
+            )
+            viewing.scheduled_at = slot.starts_at
+            # The old code was issued for the old window; staff issue a new one.
+            viewing.access_code, viewing.access_code_expires_at = "", None
+            viewing.reminder_24h_sent = viewing.reminder_2h_sent = viewing.confirmation_sent = False
+            viewing.save()
+        tour.viewing, tour.preferred_time = viewing, slot.value
+    else:
+        part = (args.get("new_time") or "").strip().lower()
+        if part and part not in DAY_PARTS:
+            raise ToolError(f"For this tour, new_time must be one of: {', '.join(DAY_PARTS)}.")
+        if tour.viewing_id:
+            tour.viewing.status = ViewingStatus.CANCELLED
+            tour.viewing.save(update_fields=["status"])
+            tour.viewing = None
+        tour.preferred_time = part
+        tour.status = TourStatus.PENDING_REVIEW
+    tour.preferred_date = when
+    tour.save(update_fields=["preferred_date", "preferred_time", "viewing", "status"])
+    new_label = _when_label(tour)
+
+    if tour.lead_id:
+        LeadActivity.objects.create(lead_id=tour.lead_id, activity_type=ActivityType.NOTE,
+                                    note=f"Phone agent moved tour {_reference(tour)} from {old_label} to {new_label}")
+    notify_staff(
+        subject=f"Tour moved by phone: {tour.full_name} - {tour.property}",
+        body=describe([
+            ("Reference", _reference(tour)), ("Was", old_label), ("Now", new_label), ("Type", tour.tour_type),
+            ("Open in admin", admin_link(f"scheduler/tourrequest/{tour.id}/change")),
+        ]) + "\n\nAny door code already sent is void; issue a new one for the new time.\n",
+        kind="tour",
+    )
+    return {"reference": _reference(tour), "when": new_label, "tell_the_caller": f"Done - your tour is now {new_label}."}
+
+
+def cancel_tour(args: dict) -> dict:
+    tour = _one_tour(args)
+    if tour.viewing_id:
+        viewing = tour.viewing
+        viewing.status = ViewingStatus.CANCELLED
+        viewing.access_code, viewing.access_code_expires_at = "", None
+        viewing.save(update_fields=["status", "access_code", "access_code_expires_at"])
+    # `reviewed_at` is what starts the ID-deletion clock, so a cancelled
+    # tour's documents are purged on the same schedule as a reviewed one.
+    tour.status, tour.reviewed_at = TourStatus.CANCELLED, timezone.now()
+    tour.save(update_fields=["status", "reviewed_at"])
+    if tour.lead_id:
+        LeadActivity.objects.create(lead_id=tour.lead_id, activity_type=ActivityType.NOTE,
+                                    note=f"Phone agent cancelled tour {_reference(tour)} at the caller's request")
+    notify_staff(
+        subject=f"Tour cancelled by phone: {tour.full_name} - {tour.property}",
+        body=describe([
+            ("Reference", _reference(tour)), ("Was", _when_label(tour)),
+            ("Open in admin", admin_link(f"scheduler/tourrequest/{tour.id}/change")),
+        ]),
+        kind="tour",
+    )
+    return {"cancelled": True, "tell_the_caller": "Your tour is cancelled. You are welcome to book another any time."}
 
 
 def save_caller_details(args: dict) -> dict:
@@ -388,18 +630,59 @@ def check_application_status(args: dict) -> dict:
     }
 
 
+# Mirrors frontend lib/content/qualifications.ts (TIER_ONE, INCOME_DOCUMENTS).
+# Change them together: the phone line must not state a different rule from
+# the published criteria page - that gap is exactly the Fair Housing exposure
+# the published criteria exist to close.
+WHAT_WE_ASK = [
+    "You want the home: apply for any home listed as available. No pre-qualification and no minimum score; a person reads every application.",
+    "You can afford the monthly cost: the all-in total shown on the listing, which already includes every required fee.",
+    "You agree the terms: lease length and which utilities are yours are set with you.",
+    "Identification: a government photo ID. An ITIN is accepted in place of an SSN.",
+]
+INCOME_DOCUMENTS = [
+    "Recent pay stubs",
+    "Bank statements showing regular deposits",
+    "Tax returns or 1099s, for self-employed and contract income",
+    "An offer letter, for a job accepted but not yet started",
+    "Benefit award letters, including Social Security, disability, and housing vouchers",
+    "Court-ordered support documentation",
+]
+
+
 def get_leasing_policies(_args: dict) -> dict:
     site = settings.PUBLIC_SITE_URL.rstrip("/")
+    contact = {
+        "phone": settings.COMPANY_PHONE, "phone_hours": settings.COMPANY_PHONE_HOURS,
+        "email": settings.COMPANY_EMAIL, "office_address": settings.COMPANY_ADDRESS.replace("|", ", "),
+    }
     return {
+        # Unset values are left out rather than sent blank, so the model has
+        # nothing to fill in with a guess.
+        "contact": {k: v for k, v in contact.items() if v},
         "application_fee": format_usd(settings.APPLICATION_FEE_CENTS),
         "lease_admin_fee": format_usd(settings.MOVE_IN_LEASE_ADMIN_FEE_CENTS),
         "application_decision_hours": settings.DECISION_WINDOW_HOURS,
-        "tour_confirmation_hours": RESPONSE_HOURS,
-        "how_to_apply": f"Online at {site}/apply, from any listing page.",
-        "qualification_criteria_page": f"{site}/qualifications",
-        "fees_page": f"{site}/fees",
-        "housing_vouchers_page": f"{site}/housing-vouchers",
-        "fair_housing_page": f"{site}/fair-housing",
+        "what_we_ask_of_applicants": WHAT_WE_ASK,
+        "income_documents_accepted": INCOME_DOCUMENTS,
+        "housing_vouchers": "Many homes accept vouchers; search with voucher_accepted to find them.",
+        "pets": "Set per home; get_home_details gives each home's pet policy and any pet fees.",
+        "tours": {
+            "self_guided": (
+                "Book a time with find_tour_times and book_tour. The caller uploads a photo of their ID "
+                "from a link we email; once it is checked, the door code is sent to them. Door codes are "
+                "never given over the phone."
+            ),
+            "with_staff": f"In-person or video tours are requested; staff confirm a time within {RESPONSE_HOURS} business hours.",
+            "cost": "Tours are free and do not require an application.",
+        },
+        "how_to_apply": f"Online at {site}/apply, or from any listing page.",
+        "pages": {
+            "qualifications": f"{site}/qualifications",
+            "fees": f"{site}/fees",
+            "housing_vouchers": f"{site}/housing-vouchers",
+            "fair_housing": f"{site}/fair-housing",
+        },
     }
 
 
@@ -407,6 +690,12 @@ def get_leasing_policies(_args: dict) -> dict:
 
 _STR = {"type": "string"}
 _BOOL = {"type": "boolean"}
+_TOUR_LOOKUP = {
+    "phone": {**_STR, "description": "The phone number the tour was booked with."},
+    "reference": {**_STR, "description": "The 8-character booking reference, if they have it."},
+    "email": _STR,
+    "last_name": _STR,
+}
 
 TOOLS = {
     "search_homes": {
@@ -443,27 +732,73 @@ TOOLS = {
             "properties": {"slug": _STR, "address": _STR},
         },
     },
+    "find_tour_times": {
+        "handler": find_tour_times,
+        "description": (
+            "Open self-guided tour times for one home on one date, in the home's local time. "
+            "Call this before booking a self-tour and offer the caller two or three times."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "home_slug": _STR,
+                "date": {**_STR, "description": "YYYY-MM-DD."},
+            },
+            "required": ["home_slug", "date"],
+        },
+    },
     "book_tour": {
         "handler": book_tour,
         "description": (
-            "Request a tour of a home. This creates a request that a person confirms; tell the "
-            "caller it is requested, not confirmed. Confirm the date and phone number back to "
-            "the caller before calling this."
+            "Book a tour. tour_type 'self-tour' holds an exact time from find_tour_times (pass it as "
+            "'time'); the caller then uploads their ID from an emailed link and staff send the door "
+            "code. 'in-person' or 'video' is a request for a part of the day that staff confirm. "
+            "Read the home, date, time and phone number back to the caller and get a yes first."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "home_slug": {**_STR, "description": "The slug from search_homes or get_home_details."},
+                "tour_type": {"type": "string", "enum": list(TOUR_KINDS)},
                 "full_name": _STR,
                 "phone": {**_STR, "description": "Ten-digit US number. Use the caller's number if they agree."},
-                "email": {**_STR, "description": "Optional. If given, a confirmation email is sent."},
+                "email": {**_STR, "description": "Strongly recommended for self-tours: the ID upload link is emailed."},
                 "preferred_date": {**_STR, "description": "YYYY-MM-DD."},
-                "preferred_time": {"type": "string", "enum": list(DAY_PARTS)},
-                "tour_type": {"type": "string", "enum": list(TOUR_KINDS)},
-                "notes": _STR,
+                "time": {**_STR, "description": "Self-tour only: a 'time' value from find_tour_times, e.g. 14:30."},
+                "preferred_time": {"type": "string", "enum": list(DAY_PARTS), "description": "In-person/video only."},
+                "notes": {**_STR, "description": "Anything to arrange, e.g. step-free access."},
             },
-            "required": ["home_slug", "full_name", "phone", "preferred_date"],
+            "required": ["home_slug", "tour_type", "full_name", "phone", "preferred_date"],
         },
+    },
+    "check_my_tours": {
+        "handler": check_my_tours,
+        "description": (
+            "Look up a caller's upcoming tours. Needs the phone number the tour was booked with plus "
+            "ONE of: reference, email, or last name. Never reveals a door code."
+        ),
+        "inputSchema": {"type": "object", "properties": _TOUR_LOOKUP, "required": ["phone"]},
+    },
+    "reschedule_tour": {
+        "handler": reschedule_tour,
+        "description": (
+            "Move a caller's tour. Same identity check as check_my_tours. For a self-tour, new_time "
+            "is a value from find_tour_times; otherwise a part of the day. Confirm with the caller first."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                **_TOUR_LOOKUP,
+                "new_date": {**_STR, "description": "YYYY-MM-DD."},
+                "new_time": _STR,
+            },
+            "required": ["phone", "new_date"],
+        },
+    },
+    "cancel_tour": {
+        "handler": cancel_tour,
+        "description": "Cancel a caller's tour. Same identity check as check_my_tours. Confirm with the caller first.",
+        "inputSchema": {"type": "object", "properties": _TOUR_LOOKUP, "required": ["phone"]},
     },
     "save_caller_details": {
         "handler": save_caller_details,
@@ -506,7 +841,10 @@ TOOLS = {
     },
     "get_leasing_policies": {
         "handler": get_leasing_policies,
-        "description": "Application fee, lease admin fee, decision timeline, and where to apply.",
+        "description": (
+            "Company contact details and office hours, fees, what we ask of applicants, accepted "
+            "income documents, how tours work, and where to apply. Call this for general questions."
+        ),
         "inputSchema": {"type": "object", "properties": {}},
     },
 }

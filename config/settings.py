@@ -403,6 +403,21 @@ MAILER_SYNC_KEY = env("MAILER_SYNC_KEY", default="")
 # the endpoint entirely (404), so a forgotten env var fails closed.
 VOICE_MCP_TOKEN = env("VOICE_MCP_TOKEN", default="")
 
+# Self-guided tour slots the phone agent can book, in each home's local time.
+# Last slot ends at END_HOUR. MIN_NOTICE gives staff time to check the ID and
+# send the door code before anyone arrives.
+SELF_TOUR_START_HOUR = env.int("SELF_TOUR_START_HOUR", default=9)
+SELF_TOUR_END_HOUR = env.int("SELF_TOUR_END_HOUR", default=18)
+SELF_TOUR_SLOT_MINUTES = env.int("SELF_TOUR_SLOT_MINUTES", default=30)
+SELF_TOUR_MIN_NOTICE_HOURS = env.int("SELF_TOUR_MIN_NOTICE_HOURS", default=2)
+
+# Contact facts the phone agent can read out. The same values as the public
+# site's NEXT_PUBLIC_COMPANY_* - blank means "not published", never a guess.
+COMPANY_PHONE = env("COMPANY_PHONE", default="")
+COMPANY_PHONE_HOURS = env("COMPANY_PHONE_HOURS", default="")
+COMPANY_EMAIL = env("COMPANY_EMAIL", default="")
+COMPANY_ADDRESS = env("COMPANY_ADDRESS", default="")
+
 DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="Skelton Realty Group <no-reply@skeltonrealtygroup.com>")
 EMAIL_BACKEND = env("EMAIL_BACKEND", default="django.core.mail.backends.console.EmailBackend")
 EMAIL_HOST = env("EMAIL_HOST", default="")
