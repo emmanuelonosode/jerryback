@@ -1,0 +1,54 @@
+{% extends "admin/base.html" %}
+
+{% comment %}
+The applicant's full identity numbers, for checking them against their ID.
+
+Its own page rather than always on the application: a number on screen only
+when someone asked for it, and every view is written to the application's
+History (django LogEntry) so there is a record of who looked and when.
+{% endcomment %}
+
+{% block title %}Identity check | {{ site_title }}{% endblock %}
+{% block breadcrumbs %}{% endblock %}
+
+{% block content %}
+<div class="srg-reveal">
+  <p class="srg-reveal__back"><a href="{{ back_url }}">&larr; Back to {{ name }}'s application</a></p>
+  <h1 class="srg-reveal__title">Identity check: {{ name }}</h1>
+  <p class="srg-reveal__note">Compare these with the photo ID and any document they sent. This view has been recorded in the application's history.</p>
+
+  <dl class="srg-reveal__list">
+    <div class="srg-reveal__row">
+      <dt>{{ id_type|default:"SSN / ITIN" }}</dt>
+      {% if ssn %}<dd class="srg-reveal__value">{{ ssn }}</dd>{% else %}<dd class="srg-reveal__missing">Not on file</dd>{% endif %}
+    </div>
+    <div class="srg-reveal__row">
+      <dt>Date of birth</dt>
+      {% if dob %}<dd class="srg-reveal__value srg-reveal__value--text">{{ dob }}</dd>{% else %}<dd class="srg-reveal__missing">Not on file</dd>{% endif %}
+    </div>
+    <div class="srg-reveal__row">
+      <dt>Driver's licence</dt>
+      {% if licence %}<dd class="srg-reveal__value">{{ licence }}{% if licence_state %} <span class="srg-reveal__state">({{ licence_state }})</span>{% endif %}</dd>{% else %}<dd class="srg-reveal__missing">Not on file</dd>{% endif %}
+    </div>
+    <div class="srg-reveal__row">
+      <dt>Name on the application</dt>
+      <dd class="srg-reveal__value srg-reveal__value--text">{{ full_name }}</dd>
+    </div>
+  </dl>
+
+  {% if id_documents %}
+    <h2 class="srg-reveal__subtitle">ID documents they sent</h2>
+    <ul class="srg-docs">
+      {% for doc in id_documents %}
+        <li class="srg-doc">
+          <div class="srg-doc__body">
+            <strong>{{ doc.name }}</strong>
+            <span class="srg-doc__meta">Sent {{ doc.when }}</span>
+            <span class="srg-doc__actions"><a class="srg-button" href="{{ doc.url }}" target="_blank" rel="noopener">View</a></span>
+          </div>
+        </li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+</div>
+{% endblock %}

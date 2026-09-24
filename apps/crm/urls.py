@@ -20,6 +20,11 @@ urlpatterns = [
     path("lease/<uuid:application_id>/", views.lease_agreement_detail, name="lease-agreement-detail"),
     path("lease/<uuid:application_id>/sign/", views.sign_lease_agreement, name="sign-lease-agreement"),
     path(
+        "admin/identity/<uuid:application_id>/",
+        views_admin.reveal_identity,
+        name="reveal-application-identity",
+    ),
+    path(
         "admin/document/<uuid:document_id>/",
         views_admin.secure_application_document,
         name="secure-application-document",

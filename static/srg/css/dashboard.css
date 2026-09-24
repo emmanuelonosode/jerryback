@@ -140,3 +140,121 @@
 .dark .srg-money__sub { color: rgb(168 162 158); }
 .srg-money__overdue { margin-top: 0.75rem; font-size: 0.875rem; font-weight: 500; color: rgb(185 28 28); }
 .dark .srg-money__overdue { color: rgb(252 165 165); }
+
+/* ---- Rental application: phone-friendly blocks ---------------------------
+   The application tabs are read on phones as often as on desks. Tables scroll
+   inside their own box; buttons and document cards are thumb-sized (44px). */
+
+.srg-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.srg-kv th { min-width: 9rem; }
+
+.srg-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 0 1rem;
+  border-radius: 6px;
+  background: rgb(29 93 184);
+  color: #fff !important;
+  font-weight: 600;
+  text-decoration: none !important;
+}
+.srg-button:hover { background: rgb(22 74 150); }
+.srg-button--quiet {
+  background: transparent;
+  color: rgb(29 93 184) !important;
+  border: 1px solid rgb(29 93 184);
+}
+.srg-button--quiet:hover { background: rgb(29 93 184 / 0.08); }
+.dark .srg-button--quiet { color: rgb(147 180 240) !important; border-color: rgb(147 180 240); }
+
+.srg-docs {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.srg-doc {
+  display: flex;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid rgb(231 229 228);
+  border-radius: 8px;
+}
+.dark .srg-doc { border-color: rgb(68 64 60); }
+
+.srg-doc__thumb,
+.srg-doc__icon {
+  width: 4.5rem;
+  height: 4.5rem;
+  flex-shrink: 0;
+  border-radius: 6px;
+  object-fit: cover;
+}
+
+.srg-doc__icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgb(245 245 244);
+  font-weight: 700;
+  font-size: 0.8rem;
+  color: rgb(87 83 78);
+}
+.dark .srg-doc__icon { background: rgb(41 37 36); color: rgb(214 211 209); }
+
+.srg-doc__body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.srg-doc__meta {
+  font-size: 0.8rem;
+  color: rgb(120 113 108);
+  overflow-wrap: anywhere;
+}
+
+.srg-doc__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.25rem;
+}
+
+/* The identity check page. */
+.srg-reveal { max-width: 40rem; padding: 1rem 0; }
+.srg-reveal__back a { display: inline-flex; min-height: 44px; align-items: center; font-weight: 600; }
+.srg-reveal__title { font-size: 1.5rem; font-weight: 700; margin: 0.5rem 0; }
+.srg-reveal__subtitle { font-size: 1.1rem; font-weight: 600; margin: 1.5rem 0 0.5rem; }
+.srg-reveal__note { color: rgb(120 113 108); margin-bottom: 1rem; }
+.srg-reveal__list { display: grid; gap: 0.75rem; margin: 0; }
+.srg-reveal__row {
+  padding: 0.75rem 1rem;
+  border: 1px solid rgb(231 229 228);
+  border-radius: 8px;
+}
+.dark .srg-reveal__row { border-color: rgb(68 64 60); }
+.srg-reveal__row dt { font-size: 0.8rem; color: rgb(120 113 108); }
+.srg-reveal__value {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 1.5rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  margin: 0.25rem 0 0;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+.srg-reveal__value--text { font-family: inherit; font-size: 1.1rem; letter-spacing: 0; }
+.srg-reveal__state { font-size: 1rem; font-weight: 400; }
+.srg-reveal__missing { margin: 0.25rem 0 0; color: rgb(120 113 108); font-style: italic; }

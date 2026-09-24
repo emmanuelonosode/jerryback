@@ -319,28 +319,46 @@ class GuarantorPortalTests(TestCase):
 
 
 class AdminPiiTests(TestCase):
-    """The full SSN needs the PII grant; an agent sees the last four only."""
+    """
+    The full SSN is never printed on the application page. Admin-role staff
+    open a separate identity-check page, and every view is logged.
+    """
 
     def setUp(self):
         self.app = make_application()
         self.app.ssn, self.app.ssn_last4 = SSN, "6789"
         self.app.save()
         self.url = reverse("admin:crm_rentalapplication_change", args=[self.app.pk])
+        self.reveal = reverse("reveal-application-identity", args=[self.app.pk])
 
-    def page_for(self, role):
+    def login(self, role):
         staff = User.objects.create_user(email=f"{role.lower()}@srg.test", password="x" * 12, role=role, is_staff=True)
         from django.contrib.auth.models import Permission
 
         staff.user_permissions.add(*Permission.objects.filter(codename__in=["view_rentalapplication", "change_rentalapplication"]))
         self.client.force_login(staff)
-        response = self.client.get(self.url)
-        self.assertEqual(response.status_code, 200)
-        return response.content.decode()
+        return staff
 
-    def test_an_agent_sees_last_four_and_not_the_full_number(self):
-        page = self.page_for(Role.AGENT)
-        self.assertIn("6789", page)
-        self.assertNotIn(SSN, page)
+    def test_the_application_page_shows_only_the_last_four(self):
+        for role in (Role.AGENT, Role.ADMIN):
+            self.login(role)
+            page = self.client.get(self.url).content.decode()
+            self.assertIn("6789", page)
+            self.assertNotIn(SSN, page)
 
-    def test_an_admin_with_the_pii_grant_sees_it(self):
-        self.assertIn(SSN, self.page_for(Role.ADMIN))
+    def test_an_admin_opens_the_identity_page_and_the_view_is_logged(self):
+        from django.contrib.admin.models import LogEntry
+
+        admin_user = self.login(Role.ADMIN)
+        self.assertIn(self.reveal, self.client.get(self.url).content.decode())
+        page = self.client.get(self.reveal)
+        self.assertEqual(page.status_code, 200)
+        self.assertIn(SSN, page.content.decode())
+        entry = LogEntry.objects.get(object_id=str(self.app.pk))
+        self.assertEqual(entry.user_id, admin_user.pk)
+        self.assertIn("identity", entry.change_message)
+
+    def test_an_agent_cannot_open_the_identity_page(self):
+        self.login(Role.AGENT)
+        self.assertNotIn(self.reveal, self.client.get(self.url).content.decode())
+        self.assertEqual(self.client.get(self.reveal).status_code, 404)

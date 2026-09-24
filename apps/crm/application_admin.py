@@ -65,11 +65,11 @@ def _table(rows) -> str:
     """rows: [(label, value)] -> a two-column table. Values are escaped."""
     body = format_html_join(
         "",
-        "<tr><th style='text-align:left;padding:4px 16px 4px 0;font-weight:600;vertical-align:top;white-space:nowrap'>{}</th>"
+        "<tr><th style='text-align:left;padding:4px 16px 4px 0;font-weight:600;vertical-align:top'>{}</th>"
         "<td style='padding:4px 0'>{}</td></tr>",
         ((label, value if value not in (None, "") else "—") for label, value in rows),
     )
-    return format_html("<table style='border-collapse:collapse'>{}</table>", body)
+    return format_html("<div class='srg-scroll'><table class='srg-kv' style='border-collapse:collapse'>{}</table></div>", body)
 
 
 def _list_table(headers, rows) -> str:
@@ -81,7 +81,9 @@ def _list_table(headers, rows) -> str:
         ((format_html_join("", "<td style='padding:4px 12px 4px 0;vertical-align:top'>{}</td>",
                            ((c if c not in (None, "") else "—",) for c in row)),) for row in rows),
     )
-    return format_html("<table style='border-collapse:collapse'><thead><tr>{}</tr></thead><tbody>{}</tbody></table>", head, body)
+    # Wide tables scroll inside their own box on a phone rather than
+    # stretching the whole admin page sideways.
+    return format_html("<div class='srg-scroll'><table style='border-collapse:collapse;min-width:100%'><thead><tr>{}</tr></thead><tbody>{}</tbody></table></div>", head, body)
 
 
 def _section(title, content) -> str:
@@ -181,7 +183,7 @@ class RentalApplicationAdmin(UnfoldModelAdmin):
     inlines = [DocumentRequestInline, GuarantorInline]
 
     readonly_fields = (
-        "applicant_block", "identity_block", "background_block", "income_block",
+        "applicant_block", "identity_block", "background_block", "income_block", "documents_block",
         "household_block", "payment_block", "lease_block", "everything_block",
         "move_in_preview", "verified_at", "decision_due_at", "decided_at", "created_at", "updated_at",
     )
@@ -204,6 +206,7 @@ class RentalApplicationAdmin(UnfoldModelAdmin):
             ("Income", {"classes": ["tab"], "fields": ("income_block",)}),
             ("Household", {"classes": ["tab"], "fields": ("household_block",)}),
             ("Payment", {"classes": ["tab"], "fields": ("payment_block",)}),
+            ("Documents", {"classes": ["tab"], "fields": ("documents_block",)}),
             ("Move-in terms", {
                 "classes": ["tab"],
                 "fields": (
@@ -292,7 +295,7 @@ class RentalApplicationAdmin(UnfoldModelAdmin):
         dob = obj.date_of_birth.strftime("%B %d, %Y") if obj.date_of_birth else ""
         return _section("Who they are", _table([
             ("Name", " ".join(x for x in (obj.first_name, obj.middle_name, obj.last_name) if x)),
-            ("Date of birth", dob if self._pii(obj) else ("On file (needs PII access)" if dob else "")),
+            ("Date of birth", "On file - see Identity & background" if dob else ""),
             ("Email", obj.email),
             ("Phone", f"{obj.cell_phone} ({d.get('phoneType')})" if d.get("phoneType") and obj.cell_phone else obj.cell_phone),
             ("Prefers to be contacted by", d.get("preferredContactMethod")),
@@ -307,19 +310,27 @@ class RentalApplicationAdmin(UnfoldModelAdmin):
     @admin.display(description="")
     def identity_block(self, obj):
         d = obj.draft_data or {}
-        pii = self._pii(obj)
         rows = [
             ("ID type", obj.id_type or d.get("idType")),
-            ("Last 4 digits", f"•••-••-{obj.ssn_last4}" if obj.ssn_last4 else ""),
-        ]
-        if pii:
-            rows.append(("Full number", obj.ssn or ""))
-        rows += [
+            ("SSN / ITIN", f"•••-••-{obj.ssn_last4}" if obj.ssn_last4 else "Not on file"),
             ("Has a driver's licence", _yes_no(d.get("hasLicense"))),
             ("Licence state", obj.drivers_license_state),
-            ("Licence number", (obj.drivers_license_number or "") if pii else ("On file (needs PII access)" if obj.drivers_license_number else "")),
+            ("Licence number", "On file" if obj.drivers_license_number else "Not on file"),
         ]
-        return _section("Identification", _table(rows))
+        if not obj.pk:
+            action = ""
+        elif self._pii(obj):
+            action = format_html(
+                "<p style='margin-top:12px'><a class='srg-button' href='{}'>Show full SSN, licence and date of birth</a></p>"
+                "<p style='{};margin-top:6px'>Opens a separate page to check against their ID. Each view is recorded in History.</p>",
+                reverse("reveal-application-identity", args=[obj.pk]), _MUTED,
+            )
+        else:
+            action = format_html(
+                "<p style='{};margin-top:10px'>Full numbers are visible to Admin-role staff only. Ask an admin to check them against the ID.</p>",
+                _MUTED,
+            )
+        return _section("Identification", _table(rows)) + action
 
     @admin.display(description="")
     def background_block(self, obj):
@@ -420,6 +431,35 @@ class RentalApplicationAdmin(UnfoldModelAdmin):
             + _section("Payments", _list_table(["Date", "Amount", "Method", "Status", "Reference", "Proof", ""], rows))
             + _section("Invoices", _list_table(["Number", "For", "Total", "Status", "Due", ""], invoices))
         )
+
+    @admin.display(description="")
+    def documents_block(self, obj):
+        """Every file the applicant sent, as cards a thumb can open on a phone."""
+        if not obj.pk:
+            return "—"
+        docs = list(obj.documents.select_related("request").order_by("-created_at"))
+        if not docs:
+            return format_html(
+                "<p style='{}'>Nothing uploaded yet. To ask for a document, open the "
+                "\"Documents requested from the applicant\" tab at the top and add a request.</p>", _MUTED,
+            )
+        cards = []
+        for d in docs:
+            url = reverse("secure-application-document", args=[d.id])
+            preview = (
+                format_html("<a href='{}' target='_blank' rel='noopener'><img class='srg-doc__thumb' src='{}' alt='' loading='lazy'></a>", url, url)
+                if d.content_type.startswith("image/") and d.content_type not in ("image/heic", "image/heif")
+                else format_html("<div class='srg-doc__icon'>{}</div>", "PDF" if d.content_type == "application/pdf" else "FILE")
+            )
+            cards.append(format_html(
+                "<li class='srg-doc'>{}<div class='srg-doc__body'>"
+                "<strong>{}</strong><span class='srg-doc__meta'>{} · {} · {} KB</span>"
+                "<span class='srg-doc__actions'><a class='srg-button' href='{}' target='_blank' rel='noopener'>View</a>"
+                "<a class='srg-button srg-button--quiet' href='{}?download=1'>Download</a></span></div></li>",
+                preview, d.get_kind_display(), d.original_name or d.stored_name,
+                timezone.localtime(d.created_at).strftime("%d %b %Y, %H:%M"), max(1, d.size // 1024), url, url,
+            ))
+        return format_html("<ul class='srg-docs'>{}</ul>", format_html_join("", "{}", ((c,) for c in cards)))
 
     @admin.display(description="")
     def lease_block(self, obj):
