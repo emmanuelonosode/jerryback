@@ -55,6 +55,7 @@ class LeadSource(models.TextChoices):
     FACEBOOK = "FACEBOOK", "Facebook"
     DIRECT = "DIRECT", "Direct"
     CALLBACK = "CALLBACK", "Callback request"
+    PHONE_AGENT = "PHONE_AGENT", "AI phone agent"
 
 
 class LeadStatus(models.TextChoices):

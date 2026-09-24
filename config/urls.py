@@ -32,7 +32,36 @@ def health(_request):
     return JsonResponse({"status": "ok"})
 
 
+from django.views.generic.base import RedirectView
+
 ADMIN_PATH = getattr(settings, "ADMIN_PATH", "")
+admin_prefix = ADMIN_PATH.strip("/") + "/" if ADMIN_PATH else ""
+
+redirect_patterns = []
+
+# 1. Specific aliases first
+redirect_patterns.extend([
+    path("transactions/payment/", RedirectView.as_view(url=f"/{admin_prefix}billing/payment/", permanent=False, query_string=True)),
+    path("transactions/payment", RedirectView.as_view(url=f"/{admin_prefix}billing/payment/", permanent=False, query_string=True)),
+    path("admin/transactions/payment/", RedirectView.as_view(url=f"/{admin_prefix}billing/payment/", permanent=False, query_string=True)),
+    path("admin/transactions/payment", RedirectView.as_view(url=f"/{admin_prefix}billing/payment/", permanent=False, query_string=True)),
+])
+if admin_prefix:
+    redirect_patterns.extend([
+        path(f"{admin_prefix}transactions/payment/", RedirectView.as_view(url=f"/{admin_prefix}billing/payment/", permanent=False, query_string=True)),
+        path(f"{admin_prefix}transactions/payment", RedirectView.as_view(url=f"/{admin_prefix}billing/payment/", permanent=False, query_string=True)),
+    ])
+
+# 2. General root and admin redirects
+if admin_prefix:
+    redirect_patterns.append(
+        path("", RedirectView.as_view(url=f"/{admin_prefix}", permanent=False))
+    )
+    if admin_prefix != "admin/":
+        redirect_patterns.extend([
+            path("admin/", RedirectView.as_view(url=f"/{admin_prefix}", permanent=False, query_string=True)),
+            path("admin/<path:subpath>", RedirectView.as_view(url=f"/{admin_prefix}%(subpath)s", permanent=False, query_string=True)),
+        ])
 
 urlpatterns = [
     path("healthz", health, name="health"),
@@ -47,18 +76,10 @@ urlpatterns = [
     path("api/v1/careers/", include("apps.content.urls")),
     path("api/v1/analytics/", include("apps.analytics.urls")),
     path("api/v1/mailer/", include("apps.integrations.urls")),
+    path("api/v1/voice/", include("apps.voice.urls")),
 ]
 
-# Ingested listing photography, in development only.
-#
-# ORDER IS LOAD-BEARING. ADMIN_PATH is "" on this host, so `admin.site.urls` is
-# mounted at the root and matches every path underneath it — including
-# /media/. Appended after the admin, this route is unreachable and every image
-# 302s to the login page instead of loading. It must come first.
-#
-# In production nginx serves /media/ directly and this adds nothing:
-# django.conf.urls.static returns an empty list unless DEBUG.
-urlpatterns = static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT) + urlpatterns + [
+urlpatterns = static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT) + redirect_patterns + urlpatterns + [
     path(ADMIN_PATH, admin.site.urls),
 ]
 

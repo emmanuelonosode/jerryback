@@ -97,6 +97,7 @@ INSTALLED_APPS = [
     "apps.content",
     "apps.analytics",
     "apps.integrations",
+    "apps.voice",
 ]
 
 MIDDLEWARE = [
@@ -397,6 +398,10 @@ if not DEBUG:
 # --- Integrations ------------------------------------------------------------
 
 MAILER_SYNC_KEY = env("MAILER_SYNC_KEY", default="")
+
+# Bearer token the AI phone agent presents to /api/v1/voice/mcp. Unset disables
+# the endpoint entirely (404), so a forgotten env var fails closed.
+VOICE_MCP_TOKEN = env("VOICE_MCP_TOKEN", default="")
 
 DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="Skelton Realty Group <no-reply@skeltonrealtygroup.com>")
 EMAIL_BACKEND = env("EMAIL_BACKEND", default="django.core.mail.backends.console.EmailBackend")

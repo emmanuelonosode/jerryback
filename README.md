@@ -294,6 +294,23 @@ Partner feeds ship a monthly fee row labelled "Base Monthly Rent" whose amount
 they remain visible in the admin where a fee list shows the rent twice. They
 come back on the next sync unless the importer is fixed too.
 
+## The AI phone agent (MCP)
+
+`POST /api/v1/voice/mcp` is an MCP server (Streamable HTTP, stateless JSON) for
+the voice agent. It is off unless `VOICE_MCP_TOKEN` is set; the platform sends
+it as `Authorization: Bearer <token>`. Code in `apps/voice/`.
+
+Six tools: `search_homes`, `get_home_details`, `book_tour`,
+`save_caller_details`, `check_application_status`, `get_leasing_policies`.
+
+**It is deliberately not the whole admin.** Anyone who dials the number can
+talk to the model, and a model can be talked into calling any tool it has. So
+the tools sit at the public website's trust level: the same published
+inventory, the same anonymous writes (a tour request, a lead), and one narrow
+read — an application's *stage*, only when both the email and the phone on it
+match, and never a decline reason. Tours land as `PENDING_REVIEW` for a person
+to confirm, exactly like the web form. Leads are tagged source `PHONE_AGENT`.
+
 ## Where the implementation departs from the supplied spec
 
 Each of these is a security or correctness decision, not a preference. They are
