@@ -22,6 +22,16 @@ from django.db import models
 from django.utils import timezone
 
 
+def format_clock(value) -> str:
+    """9:00 AM, 12:30 PM - the form the public site shows."""
+    hour = value.hour % 12 or 12
+    return f"{hour}:{value.minute:02d} {'AM' if value.hour < 12 else 'PM'}"
+
+
+def format_window(start, end) -> str:
+    return f"{format_clock(start)} - {format_clock(end)}"
+
+
 class TourStatus(models.TextChoices):
     AWAITING_ID = "AWAITING_ID", "Awaiting ID"
     PENDING_REVIEW = "PENDING_REVIEW", "Pending review"
@@ -42,7 +52,16 @@ class TourRequest(models.Model):
     email = models.EmailField()
     phone = models.CharField(max_length=20, blank=True, default="")
     preferred_date = models.DateField()
-    preferred_time = models.CharField(max_length=20)
+    # The readable version of the window, as the visitor and staff see it
+    # ("9:00 AM - 10:00 AM"). Phone bookings still put a day part here
+    # ("morning") and leave the two times below empty.
+    preferred_time = models.CharField(max_length=40)
+    # The exact window, when the visitor picked one. Kept as real times rather
+    # than only the label so staff can sort and filter the queue by them.
+    time_start = models.TimeField(null=True, blank=True)
+    time_end = models.TimeField(null=True, blank=True)
+    # True when they typed their own range instead of picking an hourly slot.
+    time_is_custom = models.BooleanField(default=False)
     tour_type = models.CharField(max_length=20, default="self-tour")
     notes = models.TextField(blank=True, default="")
 
@@ -62,9 +81,31 @@ class TourRequest(models.Model):
     class Meta:
         db_table = "tour_requests"
         ordering = ["-created_at"]
+        constraints = [
+            # Both ends or neither, and never a window that ends before it starts.
+            models.CheckConstraint(
+                name="tour_window_complete_and_ordered",
+                condition=(
+                    models.Q(time_start__isnull=True, time_end__isnull=True)
+                    | models.Q(
+                        time_start__isnull=False,
+                        time_end__isnull=False,
+                        time_end__gt=models.F("time_start"),
+                    )
+                ),
+            ),
+        ]
 
     def __str__(self) -> str:
         return f"{self.full_name} — {self.get_status_display()}"
+
+    # A method, not a @property: the `property` field above shadows the builtin
+    # inside this class body.
+    def time_window_label(self) -> str:
+        """The window as a person reads it, whichever way it was booked."""
+        if self.time_start and self.time_end:
+            return format_window(self.time_start, self.time_end)
+        return self.preferred_time
 
     @classmethod
     def ready_to_purge(cls, older_than_hours: int = 24):

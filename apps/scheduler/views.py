@@ -12,7 +12,9 @@ point. Throttled, and it creates a Lead alongside the request so a tour is a
 person in the pipeline rather than an orphan row.
 """
 
-from django.utils.dateparse import parse_date
+from datetime import time, timedelta
+
+from django.utils.dateparse import parse_date, parse_time
 from rest_framework import status as http
 from rest_framework.decorators import api_view, permission_classes, throttle_classes
 from rest_framework.permissions import AllowAny
@@ -31,8 +33,8 @@ from apps.integrations.alerts import (
 from apps.integrations.models import queue_email
 from apps.properties.models import Property
 
-from .models import TourRequest, TourStatus
-from .storage import RejectedUpload, store_tour_id
+from .models import TourRequest, TourStatus, format_window
+from .storage import RejectedUpload, delete_tour_id, store_tour_id
 
 # The response time the public form promises. Kept here so the confirmation
 # email and the staff alert cannot quote a different number from the page the
@@ -42,8 +44,53 @@ from .storage import RejectedUpload, store_tour_id
 RESPONSE_HOURS = 4
 
 
+# The hours a tour can start and finish in. Matches the slots the site
+# offers (8am-7pm) with room either side for a custom range.
+EARLIEST_TOUR = time(7, 0)
+LATEST_TOUR = time(21, 0)
+MAX_WINDOW_MINUTES = 4 * 60
+
+
 class TourThrottle(ScopedRateThrottle):
     scope = "tour"
+
+
+class BadWindow(ValueError):
+    pass
+
+
+def parse_window(data):
+    """
+    The visitor's chosen time window, or (None, None) when they sent none.
+
+    Accepts `timeStart`/`timeEnd` ("09:00", "10:00"), or `preferredTime` as
+    "09:00-10:00". Anything else in `preferredTime` - an older page still
+    sending "afternoon" - is left for the caller to keep as a label, so a
+    cached copy of the site never loses a request over a format change.
+    """
+    start_raw = (data.get("timeStart") or "").strip()
+    end_raw = (data.get("timeEnd") or "").strip()
+    if not start_raw and not end_raw:
+        label = (data.get("preferredTime") or "").strip()
+        if label.count("-") == 1 and ":" in label:
+            start_raw, end_raw = (part.strip() for part in label.split("-"))
+        else:
+            return None, None
+
+    start = parse_time(start_raw) if start_raw else None
+    end = parse_time(end_raw) if end_raw else None
+    if start is None or end is None:
+        raise BadWindow("Choose both a start and an end time.")
+    if end <= start:
+        raise BadWindow("The end time must be after the start time.")
+    if start < EARLIEST_TOUR or end > LATEST_TOUR:
+        raise BadWindow("Tours run between 7:00 AM and 9:00 PM.")
+    minutes = (end.hour * 60 + end.minute) - (start.hour * 60 + start.minute)
+    if minutes < 30:
+        raise BadWindow("Give us at least 30 minutes.")
+    if minutes > MAX_WINDOW_MINUTES:
+        raise BadWindow("Keep the window to four hours or less.")
+    return start, end
 
 
 @api_view(["POST"])
@@ -59,6 +106,18 @@ def request_tour(request):
     if not name or not email or preferred_date is None:
         return Response(
             {"detail": "Name, email and a preferred date are required."},
+            status=http.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        time_start, time_end = parse_window(data)
+    except BadWindow as problem:
+        return Response({"detail": str(problem)}, status=http.HTTP_400_BAD_REQUEST)
+
+    # A day's grace: the visitor's "today" can be the server's yesterday.
+    if preferred_date < timezone.localdate() - timedelta(days=1):
+        return Response(
+            {"detail": "That date has already passed."},
             status=http.HTTP_400_BAD_REQUEST,
         )
 
@@ -95,14 +154,20 @@ def request_tour(request):
         email=email,
         phone=(data.get("phone") or "")[:20],
         preferred_date=preferred_date,
-        preferred_time=(data.get("preferredTime") or "")[:20],
+        preferred_time=(
+            format_window(time_start, time_end) if time_start
+            else (data.get("preferredTime") or "")
+        )[:40],
+        time_start=time_start,
+        time_end=time_end,
+        time_is_custom=bool(time_start) and bool(data.get("customTime")),
         tour_type=(data.get("kind") or "self-tour")[:20],
         notes=(data.get("note") or "")[:2000],
     )
 
     when = tour.preferred_date.strftime("%a %d %b")
-    if tour.preferred_time:
-        when += f", {tour.preferred_time}"
+    if tour.time_window_label():
+        when += f", {tour.time_window_label()}"
     home_label = str(home) if home else "a home (not specified)"
 
     # NOBODY WAS TOLD, ON EITHER SIDE.
@@ -120,6 +185,7 @@ def request_tour(request):
             ("Phone", tour.phone),
             ("Home", home_label),
             ("Wants to visit", when),
+            ("Time chosen", "Custom range" if tour.time_is_custom else "Hourly slot"),
             ("Type", tour.tour_type),
             ("Notes", tour.notes),
             ("Received", timezone.localtime().strftime("%a %d %b, %H:%M")),
@@ -175,11 +241,12 @@ def upload_tour_id(request, public_id):
     random id handed back when that request was created, and nothing else.
     The primary key is never exposed for exactly this reason.
 
-    OPTIONAL, AND IT MUST STAY OPTIONAL. An ID speeds up a self-guided
-    viewing, and requiring one before we will even talk about a time is how
-    the previous version of this flow ended up with five requests stranded in
-    an AWAITING_ID state that nothing could leave. The tour is already
-    requested by the time this is called; this only ever adds to it.
+    THE TOUR EXISTS BEFORE THIS IS CALLED. The forms ask for the front and
+    back of an ID, but the request is created first and never waits on this:
+    requiring a document before the request is even recorded is how the
+    previous version of this flow ended up with five requests stranded in an
+    AWAITING_ID state that nothing could leave. A failed upload leaves a
+    contactable lead and a /tour-id/<public_id> link to try again.
 
     ONLY BEFORE REVIEW. Once staff have decided, the documents are on their
     way to being purged and re-uploading into that is pointless.
@@ -193,25 +260,44 @@ def upload_tour_id(request, public_id):
             status=http.HTTP_409_CONFLICT,
         )
 
-    saved = []
+    uploads = {}
     for side in ("front", "back"):
         upload = request.FILES.get(f"id{side.capitalize()}") or request.FILES.get(side)
-        if upload is None or upload.size == 0:
-            continue
+        if upload is not None and upload.size > 0:
+            uploads[side] = upload
+
+    # BOTH SIDES, BEFORE ANYTHING IS STORED. Staff check the photo on the
+    # front and the barcode on the back; half an ID means a second round of
+    # emails. A side already on file counts, so a retry can send just the
+    # missing one. Refused up front so nothing half-saved is left behind.
+    missing = [
+        side for side in ("front", "back")
+        if side not in uploads and not getattr(tour, f"id_{side}_url")
+    ]
+    if missing:
+        return Response(
+            {"detail": f"Add a photo of the {' and '.join(missing)} of your ID."},
+            status=http.HTTP_400_BAD_REQUEST,
+        )
+
+    saved = []
+    for side, upload in uploads.items():
         try:
             filename = store_tour_id(upload, tour_public_id=tour.public_id, side=side)
         except RejectedUpload as refusal:
             # Said out loud, with the reason. A silent refusal on a document
             # upload leaves somebody believing they have sent us something.
             return Response({"detail": str(refusal)}, status=http.HTTP_400_BAD_REQUEST)
+        # A replaced photo is deleted, not orphaned - an unreferenced ID on
+        # disk is one the purge job can never find.
+        previous = getattr(tour, f"id_{side}_url")
+        if previous:
+            delete_tour_id(previous)
         setattr(tour, f"id_{side}_url", filename)
         saved.append(side)
 
     if not saved:
-        return Response(
-            {"detail": "Attach a photo of your ID."},
-            status=http.HTTP_400_BAD_REQUEST,
-        )
+        return Response({"detail": "Attach a photo of your ID."}, status=http.HTTP_400_BAD_REQUEST)
 
     tour.save(update_fields=[f"id_{side}_url" for side in saved])
 
