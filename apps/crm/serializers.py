@@ -77,10 +77,11 @@ class MyApplicationSerializer(serializers.ModelSerializer):
         if obj.property_id is None or not obj.property.price_cents:
             return None
 
+        monthly_rent = obj.property.total_monthly_cents or obj.property.price_cents
         breakdown = calculate_move_in(
-            monthly_rent_cents=obj.property.price_cents,
+            monthly_rent_cents=monthly_rent,
             months_upfront=obj.months_rent_upfront or 1,
-            security_deposit_cents=obj.security_deposit_cents,
+            security_deposit_cents=obj.security_deposit_cents or monthly_rent,
             application_fee_cents=0 if obj.is_fee_paid else (obj.application_fee_cents or 0),
             lease_admin_fee_cents=obj.lease_admin_fee_cents,
             pet_fee_cents=obj.pet_fee_cents,

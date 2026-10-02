@@ -104,8 +104,9 @@ def decide_application(
                 + ", ".join(unset)
                 + ". Enter 0 where nothing is charged — a blank is not the same as free.",
             )
+        monthly_rent = application.property.total_monthly_cents or application.property.price_cents
         breakdown = calculate_move_in(
-            monthly_rent_cents=application.property.price_cents,
+            monthly_rent_cents=monthly_rent,
             months_upfront=application.months_rent_upfront,
             security_deposit_cents=application.security_deposit_cents,
             # Already collected at application time, so not charged again.
@@ -115,7 +116,7 @@ def decide_application(
             # an application with no pet is a charge nobody can justify.
             pet_fee_cents=application.pet_fee_cents if application.has_pets else 0,
             max_security_deposit_cents=deposit_ceiling_cents(
-                application.property.state, application.property.price_cents,
+                application.property.state, monthly_rent,
             ),
         )
         warnings = breakdown.warnings

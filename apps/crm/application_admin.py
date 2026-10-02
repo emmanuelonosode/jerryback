@@ -512,14 +512,15 @@ class RentalApplicationAdmin(UnfoldModelAdmin):
         from .move_in import calculate_move_in
         from .services import deposit_ceiling_cents
 
+        monthly_rent = obj.property.total_monthly_cents or obj.property.price_cents
         breakdown = calculate_move_in(
-            monthly_rent_cents=obj.property.price_cents,
+            monthly_rent_cents=monthly_rent,
             months_upfront=obj.months_rent_upfront,
             security_deposit_cents=obj.security_deposit_cents,
             application_fee_cents=0 if obj.is_fee_paid else (obj.application_fee_cents or 0),
             lease_admin_fee_cents=obj.lease_admin_fee_cents,
             pet_fee_cents=obj.pet_fee_cents if obj.has_pets else 0,
-            max_security_deposit_cents=deposit_ceiling_cents(obj.property.state, obj.property.price_cents),
+            max_security_deposit_cents=deposit_ceiling_cents(obj.property.state, monthly_rent),
         )
         rows = [(item["description"], _money(item["unit_price_cents"] * item.get("quantity", 1))) for item in breakdown.line_items]
         rows.append((format_html("<strong>Total</strong>"), format_html("<strong>{}</strong>", _money(breakdown.total_cents))))
