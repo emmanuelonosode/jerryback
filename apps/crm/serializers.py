@@ -81,7 +81,7 @@ class MyApplicationSerializer(serializers.ModelSerializer):
             monthly_rent_cents=obj.property.price_cents,
             months_upfront=obj.months_rent_upfront or 1,
             security_deposit_cents=obj.security_deposit_cents,
-            application_fee_cents=obj.application_fee_cents or 0,
+            application_fee_cents=0 if obj.is_fee_paid else (obj.application_fee_cents or 0),
             lease_admin_fee_cents=obj.lease_admin_fee_cents,
             pet_fee_cents=obj.pet_fee_cents,
         )
